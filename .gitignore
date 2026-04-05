@@ -51,3 +51,11 @@ _bmad-output/*
 .DS_Store
 ._*
 .gocache/
+
+# Opencode
+.beads/
+.opencode/
+.cli-proxy-api/
+.venv/
+*.bak
+cli-proxy-api-plus
