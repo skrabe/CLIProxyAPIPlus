@@ -50,3 +50,14 @@ _bmad-output/*
 # macOS
 .DS_Store
 ._*
+<<<<<<< HEAD
+=======
+
+# Opencode
+.beads/
+.opencode/
+.cli-proxy-api/
+.venv/
+*.bak
+cli-proxy-api-plus
+>>>>>>> 41e37df5 (fix: don't subtract cached tokens from input_tokens in OpenAI→Claude translation)
