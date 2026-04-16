@@ -121,6 +121,12 @@ func tryRefreshModels(ctx context.Context, label string) {
 		return
 	}
 
+	// Merge embedded-only entries back into the remote catalog. The embedded
+	// file may include locally-added models (e.g., a newly-released Claude model
+	// not yet in router-for-me/models); without this merge, the periodic refresh
+	// would silently drop them on every update.
+	parsed = mergeEmbeddedAdditions(parsed)
+
 	// Detect changes before updating store.
 	changed := detectChangedProviders(oldData, parsed)
 
@@ -187,6 +193,67 @@ func fetchModelsFromRemote(ctx context.Context) (*staticModelsJSON, string) {
 		return &parsed, url
 	}
 	return nil, ""
+}
+
+// mergeEmbeddedAdditions returns a catalog that starts from remote and appends
+// any models present only in the embedded catalog (by id). This lets fork
+// maintainers register a locally-added model (e.g., a newly-released Claude
+// model not yet in the shared router-for-me/models catalog) without having it
+// evicted on every periodic refresh.
+//
+// Models present in both remote and embedded keep the remote definition —
+// remote wins on updates. Only embedded-exclusive ids are appended.
+func mergeEmbeddedAdditions(remote *staticModelsJSON) *staticModelsJSON {
+	if remote == nil {
+		return remote
+	}
+	var embedded staticModelsJSON
+	if err := json.Unmarshal(embeddedModelsJSON, &embedded); err != nil {
+		log.Debugf("merge embedded additions: parse embedded models failed: %v", err)
+		return remote
+	}
+
+	merge := func(remoteList, embeddedList []*ModelInfo) []*ModelInfo {
+		if len(embeddedList) == 0 {
+			return remoteList
+		}
+		seen := make(map[string]struct{}, len(remoteList))
+		for _, m := range remoteList {
+			if m == nil {
+				continue
+			}
+			seen[strings.TrimSpace(m.ID)] = struct{}{}
+		}
+		out := remoteList
+		for _, m := range embeddedList {
+			if m == nil {
+				continue
+			}
+			id := strings.TrimSpace(m.ID)
+			if id == "" {
+				continue
+			}
+			if _, exists := seen[id]; exists {
+				continue
+			}
+			out = append(out, m)
+			seen[id] = struct{}{}
+		}
+		return out
+	}
+
+	remote.Claude = merge(remote.Claude, embedded.Claude)
+	remote.Gemini = merge(remote.Gemini, embedded.Gemini)
+	remote.Vertex = merge(remote.Vertex, embedded.Vertex)
+	remote.GeminiCLI = merge(remote.GeminiCLI, embedded.GeminiCLI)
+	remote.AIStudio = merge(remote.AIStudio, embedded.AIStudio)
+	remote.CodexFree = merge(remote.CodexFree, embedded.CodexFree)
+	remote.CodexTeam = merge(remote.CodexTeam, embedded.CodexTeam)
+	remote.CodexPlus = merge(remote.CodexPlus, embedded.CodexPlus)
+	remote.CodexPro = merge(remote.CodexPro, embedded.CodexPro)
+	remote.Kimi = merge(remote.Kimi, embedded.Kimi)
+	remote.Antigravity = merge(remote.Antigravity, embedded.Antigravity)
+	return remote
 }
 
 // detectChangedProviders compares two model catalogs and returns provider names
