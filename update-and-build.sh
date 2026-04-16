@@ -8,14 +8,26 @@ BACKUP_PATH="$INSTALL_PATH.bak"
 FIX_BRANCH="fix/byok-compaction-cached-tokens"
 PLIST_LABEL="com.cliproxyapiplus.server"
 
+# The remote to pull upstream main from. Defaults to "upstream" (standard
+# fork workflow: origin=your-fork, upstream=router-for-me/CLIProxyAPIPlus).
+# If you cloned the original repo directly, set UPSTREAM_REMOTE=origin.
+UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
+
 cd "$REPO_DIR"
 
-echo "==> Fetching upstream..."
-git fetch origin
+if ! git remote get-url "$UPSTREAM_REMOTE" > /dev/null 2>&1; then
+    echo "ERROR: git remote '$UPSTREAM_REMOTE' not configured."
+    echo "  Add it with:  git remote add upstream https://github.com/router-for-me/CLIProxyAPIPlus.git"
+    echo "  Or run with:  UPSTREAM_REMOTE=origin ./update-and-build.sh"
+    exit 1
+fi
+
+echo "==> Fetching $UPSTREAM_REMOTE..."
+git fetch "$UPSTREAM_REMOTE"
 
 echo "==> Switching to main and pulling..."
 git checkout main
-git pull origin main
+git pull "$UPSTREAM_REMOTE" main
 
 echo "==> Rebasing fix branch onto main..."
 git checkout "$FIX_BRANCH"
