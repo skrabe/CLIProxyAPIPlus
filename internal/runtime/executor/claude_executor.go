@@ -171,14 +171,24 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	body = disableThinkingIfToolChoiceForced(body)
 	body = normalizeClaudeTemperatureForThinking(body)
 
-	// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
-	if countCacheControls(body) == 0 {
+	// Rewrite cache_control to match Claude Code's actual pattern when cloaking
+	// was applied. Third-party clients (Factory, etc.) often place 2 message-level
+	// markers which Claude Code's source explicitly calls out as wasteful
+	// (services/api/claude.ts:3078: "Exactly one message-level cache_control marker
+	// per request ... with two markers the second-to-last position is protected and
+	// its locals survive an extra turn even though nothing will ever resume from
+	// there"). Also, current cloaking emits system blocks with zero cache_control,
+	// so tools and system aren't cached at all. This function strips client-supplied
+	// cache_control and applies the documented Claude Code pattern.
+	if cloakedWithBillingHeader(body) {
+		body = applyClaudeCodeCachePattern(body)
+	} else if countCacheControls(body) == 0 {
+		// Non-cloaked path (Claude Code itself or other first-party clients):
+		// preserve prior ensureCacheControl fallback for clients that sent none.
 		body = ensureCacheControl(body)
 	}
 
 	// Enforce Anthropic's cache_control block limit (max 4 breakpoints per request).
-	// Cloaking and ensureCacheControl may push the total over 4 when the client
-	// (e.g. Amp CLI) already sends multiple cache_control blocks.
 	body = enforceCacheControlLimit(body, 4)
 
 	// Normalize TTL values to prevent ordering violations under prompt-caching-scope-2026-01-05.
@@ -349,8 +359,11 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	body = disableThinkingIfToolChoiceForced(body)
 	body = normalizeClaudeTemperatureForThinking(body)
 
-	// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
-	if countCacheControls(body) == 0 {
+	// Rewrite cache_control to match Claude Code's pattern when cloaking was applied.
+	// See claude.ts:3078 for rationale on the 1-message-marker constraint.
+	if cloakedWithBillingHeader(body) {
+		body = applyClaudeCodeCachePattern(body)
+	} else if countCacheControls(body) == 0 {
 		body = ensureCacheControl(body)
 	}
 
@@ -2381,5 +2394,118 @@ func ensureModelMaxTokens(body []byte, modelID string) []byte {
 		}
 	}
 
+	return body
+}
+
+// cloakedWithBillingHeader reports whether the payload has the proxy's cloaking
+// applied (detectable via the x-anthropic-billing-header text block we inject
+// at system[0] in checkSystemInstructionsWithSigningMode).
+func cloakedWithBillingHeader(body []byte) bool {
+	return strings.HasPrefix(
+		gjson.GetBytes(body, "system.0.text").String(),
+		"x-anthropic-billing-header:",
+	)
+}
+
+// applyClaudeCodeCachePattern rewrites cache_control placement to match what
+// real Claude Code does (services/api/claude.ts:splitSysPromptPrefix +
+// addCacheBreakpoints). Strips any client-supplied markers and installs:
+//
+//   - system[1..N-1] .cache_control  (skip system[0] billing attribution)
+//   - tools[last].cache_control      (anchor tool definitions)
+//   - messages[last].content[last].cache_control  (exactly ONE message marker,
+//     per claude.ts:3078 "With two markers the second-to-last position is
+//     protected and its locals survive an extra turn even though nothing will
+//     ever resume from there — with one marker they're freed immediately")
+//
+// Total breakpoints stay within Anthropic's 4-per-request cap.
+func applyClaudeCodeCachePattern(body []byte) []byte {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return body
+	}
+
+	body = stripAllCacheControl(body)
+
+	// System: cache_control on every block after the billing attribution.
+	if system := gjson.GetBytes(body, "system"); system.IsArray() {
+		count := int(system.Get("#").Int())
+		for i := 1; i < count; i++ {
+			path := fmt.Sprintf("system.%d.cache_control", i)
+			if updated, err := sjson.SetBytes(body, path, map[string]string{"type": "ephemeral"}); err == nil {
+				body = updated
+			}
+		}
+	}
+
+	// Tools: anchor the last tool definition.
+	if tools := gjson.GetBytes(body, "tools"); tools.IsArray() {
+		count := int(tools.Get("#").Int())
+		if count > 0 {
+			path := fmt.Sprintf("tools.%d.cache_control", count-1)
+			if updated, err := sjson.SetBytes(body, path, map[string]string{"type": "ephemeral"}); err == nil {
+				body = updated
+			}
+		}
+	}
+
+	// Messages: exactly one marker on the last message's last content block.
+	if messages := gjson.GetBytes(body, "messages"); messages.IsArray() {
+		msgCount := int(messages.Get("#").Int())
+		if msgCount > 0 {
+			lastMsgIdx := msgCount - 1
+			contentPath := fmt.Sprintf("messages.%d.content", lastMsgIdx)
+			content := gjson.GetBytes(body, contentPath)
+			if content.IsArray() {
+				cCount := int(content.Get("#").Int())
+				if cCount > 0 {
+					path := fmt.Sprintf("messages.%d.content.%d.cache_control", lastMsgIdx, cCount-1)
+					if updated, err := sjson.SetBytes(body, path, map[string]string{"type": "ephemeral"}); err == nil {
+						body = updated
+					}
+				}
+			}
+		}
+	}
+
+	return body
+}
+
+// stripAllCacheControl removes every cache_control marker from tools, system,
+// and messages content blocks. Used before applyClaudeCodeCachePattern so the
+// client's (possibly wasteful) layout does not leak into the final request.
+func stripAllCacheControl(body []byte) []byte {
+	if tools := gjson.GetBytes(body, "tools"); tools.IsArray() {
+		tools.ForEach(func(idx, _ gjson.Result) bool {
+			path := fmt.Sprintf("tools.%d.cache_control", int(idx.Int()))
+			if updated, err := sjson.DeleteBytes(body, path); err == nil {
+				body = updated
+			}
+			return true
+		})
+	}
+	if system := gjson.GetBytes(body, "system"); system.IsArray() {
+		system.ForEach(func(idx, _ gjson.Result) bool {
+			path := fmt.Sprintf("system.%d.cache_control", int(idx.Int()))
+			if updated, err := sjson.DeleteBytes(body, path); err == nil {
+				body = updated
+			}
+			return true
+		})
+	}
+	if messages := gjson.GetBytes(body, "messages"); messages.IsArray() {
+		messages.ForEach(func(midx, msg gjson.Result) bool {
+			content := msg.Get("content")
+			if content.IsArray() {
+				content.ForEach(func(cidx, _ gjson.Result) bool {
+					path := fmt.Sprintf("messages.%d.content.%d.cache_control", int(midx.Int()), int(cidx.Int()))
+					if updated, err := sjson.DeleteBytes(body, path); err == nil {
+						body = updated
+					}
+					return true
+				})
+			}
+			return true
+		})
+	}
 	return body
 }
