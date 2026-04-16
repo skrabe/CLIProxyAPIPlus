@@ -170,6 +170,9 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
+	// Opus 4.7+ rejects non-default temperature/top_p/top_k. Strip them before
+	// normalizeClaudeTemperatureForThinking runs so it stays a no-op.
+	body = stripSamplingParamsForOpus47(body, baseModel)
 	body = normalizeClaudeTemperatureForThinking(body)
 
 	// Rewrite cache_control to match Claude Code's actual pattern when cloaking
@@ -199,6 +202,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	// Extract betas from body and convert to header
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
+	extraBetas = ensureTaskBudgetsBeta(extraBetas, body)
 	bodyForTranslation := body
 	bodyForUpstream := body
 	oauthToken := isClaudeOAuthToken(apiKey)
@@ -365,6 +369,9 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
+	// Opus 4.7+ rejects non-default temperature/top_p/top_k. Strip them before
+	// normalizeClaudeTemperatureForThinking runs so it stays a no-op.
+	body = stripSamplingParamsForOpus47(body, baseModel)
 	body = normalizeClaudeTemperatureForThinking(body)
 
 	// Rewrite cache_control to match Claude Code's pattern when cloaking was applied.
@@ -384,6 +391,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	// Extract betas from body and convert to header
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
+	extraBetas = ensureTaskBudgetsBeta(extraBetas, body)
 	bodyForTranslation := body
 	bodyForUpstream := body
 	oauthToken := isClaudeOAuthToken(apiKey)
@@ -567,10 +575,13 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	// Keep count_tokens requests compatible with Anthropic cache-control constraints too.
 	body = enforceCacheControlLimit(body, 4)
 	body = normalizeCacheControlTTL(body)
+	// Opus 4.7+ rejects non-default temperature/top_p/top_k in count_tokens too.
+	body = stripSamplingParamsForOpus47(body, baseModel)
 
 	// Extract betas from body and convert to header (for count_tokens too)
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
+	extraBetas = ensureTaskBudgetsBeta(extraBetas, body)
 	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 		body = applyClaudeToolPrefix(body, claudeToolPrefix)
 	}
