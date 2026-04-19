@@ -5,7 +5,7 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 BINARY_NAME="cli-proxy-api-plus"
 INSTALL_PATH="$HOME/.local/bin/$BINARY_NAME"
 BACKUP_PATH="$INSTALL_PATH.bak"
-FIX_BRANCH="fix/byok-compaction-cached-tokens"
+FIX_BRANCH="${FIX_BRANCH:-feat/claude-opus-4-7}"
 PLIST_LABEL="com.cliproxyapiplus.server"
 
 # The remote to pull upstream main from. Defaults to "upstream" (standard
