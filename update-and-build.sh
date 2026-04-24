@@ -25,13 +25,9 @@ fi
 echo "==> Fetching $UPSTREAM_REMOTE..."
 git fetch "$UPSTREAM_REMOTE"
 
-echo "==> Switching to main and pulling..."
-git checkout main
-git pull "$UPSTREAM_REMOTE" main
-
-echo "==> Rebasing fix branch onto main..."
+echo "==> Rebasing fix branch onto $UPSTREAM_REMOTE/main..."
 git checkout "$FIX_BRANCH"
-if ! git rebase main; then
+if ! git rebase "$UPSTREAM_REMOTE/main"; then
     echo "ERROR: Rebase conflict. Resolve manually:"
     echo "  cd $REPO_DIR"
     echo "  git rebase --continue  (after fixing conflicts)"
