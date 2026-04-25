@@ -2438,28 +2438,38 @@ func applyClaudeCodeCachePattern(body []byte) []byte {
 	body = stripAllCacheControl(body)
 
 	// System: cache_control on every block after the billing attribution.
+	// 1-hour TTL on the static prefix (system) so cache survives 429 storms,
+	// idle gaps, and tool-cycle pauses up to an hour. Real Claude Code does
+	// the same on subscription OAuth (per #46829, #2603). Cost: 2x base on
+	// first write vs 1.25x for 5m, but reads (0.1x) are unchanged. Net win
+	// when the same prefix is reused more than ~3-4 times within the hour.
+	systemMarker := map[string]string{"type": "ephemeral", "ttl": "1h"}
 	if system := gjson.GetBytes(body, "system"); system.IsArray() {
 		count := int(system.Get("#").Int())
 		for i := 1; i < count; i++ {
 			path := fmt.Sprintf("system.%d.cache_control", i)
-			if updated, err := sjson.SetBytes(body, path, map[string]string{"type": "ephemeral"}); err == nil {
+			if updated, err := sjson.SetBytes(body, path, systemMarker); err == nil {
 				body = updated
 			}
 		}
 	}
 
-	// Tools: anchor the last tool definition.
+	// Tools: anchor the last tool definition with 1h TTL — tools are part of
+	// the static prefix and rarely change mid-session.
 	if tools := gjson.GetBytes(body, "tools"); tools.IsArray() {
 		count := int(tools.Get("#").Int())
 		if count > 0 {
 			path := fmt.Sprintf("tools.%d.cache_control", count-1)
-			if updated, err := sjson.SetBytes(body, path, map[string]string{"type": "ephemeral"}); err == nil {
+			if updated, err := sjson.SetBytes(body, path, map[string]string{"type": "ephemeral", "ttl": "1h"}); err == nil {
 				body = updated
 			}
 		}
 	}
 
 	// Messages: exactly one marker on the last message's last content block.
+	// Keep this on 5m default — it's the rolling marker, advances every turn,
+	// and the prefix it covers turns over fast enough that 1h would just be
+	// paying the 2x write premium for cache that gets superseded each turn.
 	if messages := gjson.GetBytes(body, "messages"); messages.IsArray() {
 		msgCount := int(messages.Get("#").Int())
 		if msgCount > 0 {
