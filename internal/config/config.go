@@ -115,6 +115,13 @@ type Config struct {
 	// These are used only when the client does not send its own headers.
 	CodexHeaderDefaults CodexHeaderDefaults `yaml:"codex-header-defaults" json:"codex-header-defaults"`
 
+	// CodexServiceTier injects service_tier into every Codex request that does not already
+	// carry one. "priority" enables Fast Mode (hardware-accelerated tier) for ChatGPT Pro
+	// OAuth accounts — this is the wire value Codex CLI uses when its config.toml sets
+	// service_tier="fast". Empty string disables injection. Client-supplied values are
+	// always preserved.
+	CodexServiceTier string `yaml:"codex-service-tier" json:"codex-service-tier"`
+
 	// ClaudeKey defines a list of Claude API key configurations as specified in the YAML configuration file.
 	ClaudeKey []ClaudeKey `yaml:"claude-api-key" json:"claude-api-key"`
 

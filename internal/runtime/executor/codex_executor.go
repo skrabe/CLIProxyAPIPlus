@@ -110,6 +110,25 @@ func NewCodexExecutor(cfg *config.Config) *CodexExecutor { return &CodexExecutor
 
 func (e *CodexExecutor) Identifier() string { return "codex" }
 
+// injectCodexServiceTier writes cfg.CodexServiceTier into the request body when the
+// client has not already specified service_tier. Empty config string is a no-op.
+func injectCodexServiceTier(cfg *config.Config, body []byte) []byte {
+	if cfg == nil {
+		return body
+	}
+	tier := strings.TrimSpace(cfg.CodexServiceTier)
+	if tier == "" {
+		return body
+	}
+	if gjson.GetBytes(body, "service_tier").Exists() {
+		return body
+	}
+	if updated, err := sjson.SetBytes(body, "service_tier", tier); err == nil {
+		return updated
+	}
+	return body
+}
+
 // PrepareRequest injects Codex credentials into the outgoing HTTP request.
 func (e *CodexExecutor) PrepareRequest(req *http.Request, auth *cliproxyauth.Auth) error {
 	if req == nil {
@@ -181,6 +200,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
 	body, _ = sjson.DeleteBytes(body, "safety_identifier")
 	body, _ = sjson.DeleteBytes(body, "stream_options")
+	body = injectCodexServiceTier(e.cfg, body)
 	body = normalizeCodexInstructions(body)
 	if e.cfg == nil || e.cfg.DisableImageGeneration == config.DisableImageGenerationOff {
 		body = ensureImageGenerationTool(body, baseModel, auth)
@@ -332,6 +352,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel, requestPath)
 	body, _ = sjson.SetBytes(body, "model", baseModel)
 	body, _ = sjson.DeleteBytes(body, "stream")
+	body = injectCodexServiceTier(e.cfg, body)
 	body = normalizeCodexInstructions(body)
 	if e.cfg == nil || e.cfg.DisableImageGeneration == config.DisableImageGenerationOff {
 		body = ensureImageGenerationTool(body, baseModel, auth)
@@ -430,6 +451,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	body, _ = sjson.DeleteBytes(body, "safety_identifier")
 	body, _ = sjson.DeleteBytes(body, "stream_options")
 	body, _ = sjson.SetBytes(body, "model", baseModel)
+	body = injectCodexServiceTier(e.cfg, body)
 	body = normalizeCodexInstructions(body)
 	if e.cfg == nil || e.cfg.DisableImageGeneration == config.DisableImageGenerationOff {
 		body = ensureImageGenerationTool(body, baseModel, auth)
