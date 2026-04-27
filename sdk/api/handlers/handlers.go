@@ -823,8 +823,13 @@ func statusFromError(err error) int {
 }
 
 func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string, normalizedModel string, err *interfaces.ErrorMessage) {
-	resolvedModelName := modelName
-	initialSuffix := thinking.ParseSuffix(modelName)
+	// Codex service-tier suffix ("(fast)" / "(default)") is transparent to routing:
+	// strip it so provider lookup uses the canonical model name, then re-attach to the
+	// returned name so the Codex executor can read the override.
+	lookupName, tierOverride := util.StripCodexServiceTierSuffix(modelName)
+
+	resolvedModelName := lookupName
+	initialSuffix := thinking.ParseSuffix(lookupName)
 	if initialSuffix.ModelName == "auto" {
 		resolvedBase := util.ResolveAutoModel(initialSuffix.ModelName)
 		if initialSuffix.HasSuffix {
@@ -833,7 +838,7 @@ func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string
 			resolvedModelName = resolvedBase
 		}
 	} else {
-		resolvedModelName = util.ResolveAutoModel(modelName)
+		resolvedModelName = util.ResolveAutoModel(lookupName)
 	}
 
 	parsed := thinking.ParseSuffix(resolvedModelName)
@@ -862,6 +867,12 @@ func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string
 
 	// The thinking suffix is preserved in the model name itself, so no
 	// metadata-based configuration passing is needed.
+	switch tierOverride {
+	case "priority":
+		resolvedModelName = resolvedModelName + "(fast)"
+	case "default":
+		resolvedModelName = resolvedModelName + "(default)"
+	}
 	return providers, resolvedModelName, nil
 }
 
