@@ -110,17 +110,42 @@ func NewCodexExecutor(cfg *config.Config) *CodexExecutor { return &CodexExecutor
 
 func (e *CodexExecutor) Identifier() string { return "codex" }
 
-// injectCodexServiceTier writes cfg.CodexServiceTier into the request body when the
-// client has not already specified service_tier. Empty config string is a no-op.
-func injectCodexServiceTier(cfg *config.Config, body []byte) []byte {
-	if cfg == nil {
-		return body
+// stripCodexServiceTierSuffix detects and removes "(fast)" / "(default)" tokens from the
+// model name. Returns the cleaned model plus an override tier: "priority" for (fast),
+// "default" to explicitly clear service_tier, or "" if no suffix is present.
+func stripCodexServiceTierSuffix(model string) (string, string) {
+	const (
+		fastTok    = "(fast)"
+		defaultTok = "(default)"
+	)
+	if strings.Contains(model, fastTok) {
+		return strings.ReplaceAll(model, fastTok, ""), "priority"
 	}
-	tier := strings.TrimSpace(cfg.CodexServiceTier)
-	if tier == "" {
-		return body
+	if strings.Contains(model, defaultTok) {
+		return strings.ReplaceAll(model, defaultTok, ""), "default"
 	}
+	return model, ""
+}
+
+// injectCodexServiceTier writes a service_tier into the request body. Resolution order:
+// 1. Client already set service_tier → preserved.
+// 2. override == "default" → field stripped.
+// 3. override non-empty → written.
+// 4. cfg.CodexServiceTier non-empty → written.
+// 5. Otherwise no-op.
+func injectCodexServiceTier(cfg *config.Config, override string, body []byte) []byte {
 	if gjson.GetBytes(body, "service_tier").Exists() {
+		return body
+	}
+	if override == "default" {
+		body, _ = sjson.DeleteBytes(body, "service_tier")
+		return body
+	}
+	tier := strings.TrimSpace(override)
+	if tier == "" && cfg != nil {
+		tier = strings.TrimSpace(cfg.CodexServiceTier)
+	}
+	if tier == "" {
 		return body
 	}
 	if updated, err := sjson.SetBytes(body, "service_tier", tier); err == nil {
@@ -166,6 +191,8 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if opts.Alt == "responses/compact" {
 		return e.executeCompact(ctx, auth, req, opts)
 	}
+	var serviceTierOverride string
+	req.Model, serviceTierOverride = stripCodexServiceTierSuffix(req.Model)
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
 	apiKey, baseURL := codexCreds(auth)
@@ -200,7 +227,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
 	body, _ = sjson.DeleteBytes(body, "safety_identifier")
 	body, _ = sjson.DeleteBytes(body, "stream_options")
-	body = injectCodexServiceTier(e.cfg, body)
+	body = injectCodexServiceTier(e.cfg, serviceTierOverride, body)
 	body = normalizeCodexInstructions(body)
 	if e.cfg == nil || e.cfg.DisableImageGeneration == config.DisableImageGenerationOff {
 		body = ensureImageGenerationTool(body, baseModel, auth)
@@ -322,6 +349,8 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 }
 
 func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
+	var serviceTierOverride string
+	req.Model, serviceTierOverride = stripCodexServiceTierSuffix(req.Model)
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
 	apiKey, baseURL := codexCreds(auth)
@@ -352,7 +381,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel, requestPath)
 	body, _ = sjson.SetBytes(body, "model", baseModel)
 	body, _ = sjson.DeleteBytes(body, "stream")
-	body = injectCodexServiceTier(e.cfg, body)
+	body = injectCodexServiceTier(e.cfg, serviceTierOverride, body)
 	body = normalizeCodexInstructions(body)
 	if e.cfg == nil || e.cfg.DisableImageGeneration == config.DisableImageGenerationOff {
 		body = ensureImageGenerationTool(body, baseModel, auth)
@@ -418,6 +447,8 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if opts.Alt == "responses/compact" {
 		return nil, statusErr{code: http.StatusBadRequest, msg: "streaming not supported for /responses/compact"}
 	}
+	var serviceTierOverride string
+	req.Model, serviceTierOverride = stripCodexServiceTierSuffix(req.Model)
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
 	apiKey, baseURL := codexCreds(auth)
@@ -451,7 +482,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	body, _ = sjson.DeleteBytes(body, "safety_identifier")
 	body, _ = sjson.DeleteBytes(body, "stream_options")
 	body, _ = sjson.SetBytes(body, "model", baseModel)
-	body = injectCodexServiceTier(e.cfg, body)
+	body = injectCodexServiceTier(e.cfg, serviceTierOverride, body)
 	body = normalizeCodexInstructions(body)
 	if e.cfg == nil || e.cfg.DisableImageGeneration == config.DisableImageGenerationOff {
 		body = ensureImageGenerationTool(body, baseModel, auth)
@@ -557,6 +588,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 }
 
 func (e *CodexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	req.Model, _ = stripCodexServiceTierSuffix(req.Model)
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
 	from := opts.SourceFormat
