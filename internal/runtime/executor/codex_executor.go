@@ -110,23 +110,6 @@ func NewCodexExecutor(cfg *config.Config) *CodexExecutor { return &CodexExecutor
 
 func (e *CodexExecutor) Identifier() string { return "codex" }
 
-// stripCodexServiceTierSuffix detects and removes "(fast)" / "(default)" tokens from the
-// model name. Returns the cleaned model plus an override tier: "priority" for (fast),
-// "default" to explicitly clear service_tier, or "" if no suffix is present.
-func stripCodexServiceTierSuffix(model string) (string, string) {
-	const (
-		fastTok    = "(fast)"
-		defaultTok = "(default)"
-	)
-	if strings.Contains(model, fastTok) {
-		return strings.ReplaceAll(model, fastTok, ""), "priority"
-	}
-	if strings.Contains(model, defaultTok) {
-		return strings.ReplaceAll(model, defaultTok, ""), "default"
-	}
-	return model, ""
-}
-
 // injectCodexServiceTier writes a service_tier into the request body. Resolution order:
 // 1. Client already set service_tier → preserved.
 // 2. override == "default" → field stripped.
@@ -192,7 +175,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		return e.executeCompact(ctx, auth, req, opts)
 	}
 	var serviceTierOverride string
-	req.Model, serviceTierOverride = stripCodexServiceTierSuffix(req.Model)
+	req.Model, serviceTierOverride = util.StripCodexServiceTierSuffix(req.Model)
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
 	apiKey, baseURL := codexCreds(auth)
@@ -350,7 +333,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 
 func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
 	var serviceTierOverride string
-	req.Model, serviceTierOverride = stripCodexServiceTierSuffix(req.Model)
+	req.Model, serviceTierOverride = util.StripCodexServiceTierSuffix(req.Model)
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
 	apiKey, baseURL := codexCreds(auth)
@@ -448,7 +431,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		return nil, statusErr{code: http.StatusBadRequest, msg: "streaming not supported for /responses/compact"}
 	}
 	var serviceTierOverride string
-	req.Model, serviceTierOverride = stripCodexServiceTierSuffix(req.Model)
+	req.Model, serviceTierOverride = util.StripCodexServiceTierSuffix(req.Model)
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
 	apiKey, baseURL := codexCreds(auth)
@@ -588,7 +571,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 }
 
 func (e *CodexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
-	req.Model, _ = stripCodexServiceTierSuffix(req.Model)
+	req.Model, _ = util.StripCodexServiceTierSuffix(req.Model)
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
 	from := opts.SourceFormat

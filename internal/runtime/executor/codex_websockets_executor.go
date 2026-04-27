@@ -179,7 +179,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	}
 
 	var serviceTierOverride string
-	req.Model, serviceTierOverride = stripCodexServiceTierSuffix(req.Model)
+	req.Model, serviceTierOverride = util.StripCodexServiceTierSuffix(req.Model)
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 	apiKey, baseURL := codexCreds(auth)
 	if baseURL == "" {
@@ -392,7 +392,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	}
 
 	var serviceTierOverride string
-	req.Model, serviceTierOverride = stripCodexServiceTierSuffix(req.Model)
+	req.Model, serviceTierOverride = util.StripCodexServiceTierSuffix(req.Model)
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 	apiKey, baseURL := codexCreds(auth)
 	if baseURL == "" {
