@@ -2667,12 +2667,23 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 		}
 		auth.Quota.NextRecoverAt = next
 		auth.NextRetryAfter = next
-	case 408, 500, 502, 503, 504:
+	case 500:
 		auth.StatusMessage = "transient upstream error"
 		if disableCooling {
 			auth.NextRetryAfter = time.Time{}
 		} else {
 			auth.NextRetryAfter = now.Add(1 * time.Minute)
+		}
+	case 408, 502, 503, 504:
+		// Gateway/timeout errors (Envoy "connection termination", bad gateway, upstream timeout)
+		// are typically per-request transient — not a signal the auth itself is broken.
+		// Keep the auth eligible almost immediately so clients with a single auth don't get
+		// locked out for a whole minute after one flaky request (e.g. a long compaction upload).
+		auth.StatusMessage = "transient gateway error"
+		if disableCooling {
+			auth.NextRetryAfter = time.Time{}
+		} else {
+			auth.NextRetryAfter = now.Add(5 * time.Second)
 		}
 	default:
 		if auth.StatusMessage == "" {
