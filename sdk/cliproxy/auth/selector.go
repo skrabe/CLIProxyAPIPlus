@@ -133,12 +133,17 @@ func canonicalModelKey(model string) string {
 	if model == "" {
 		return ""
 	}
-	parsed := thinking.ParseSuffix(model)
-	modelName := strings.TrimSpace(parsed.ModelName)
-	if modelName == "" {
-		return model
+	for {
+		parsed := thinking.ParseSuffix(model)
+		if !parsed.HasSuffix {
+			return model
+		}
+		modelName := strings.TrimSpace(parsed.ModelName)
+		if modelName == "" || modelName == model {
+			return model
+		}
+		model = modelName
 	}
-	return modelName
 }
 
 func authWebsocketsEnabled(auth *Auth) bool {
