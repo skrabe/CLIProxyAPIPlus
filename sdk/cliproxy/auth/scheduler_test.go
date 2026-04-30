@@ -234,6 +234,24 @@ func TestSchedulerPick_CodexWebsocketPrefersWebsocketEnabledAcrossPriorities(t *
 	}
 }
 
+func TestSchedulerPick_RegisteredBaseModelMatchesStackedSuffixRoute(t *testing.T) {
+	t.Parallel()
+
+	registerSchedulerModels(t, "codex", "gpt-5.5", "codex-plus")
+	scheduler := newSchedulerForTest(
+		&RoundRobinSelector{},
+		&Auth{ID: "codex-plus", Provider: "codex"},
+	)
+
+	got, errPick := scheduler.pickSingle(context.Background(), "codex", "gpt-5.5(medium)(fast)", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil || got.ID != "codex-plus" {
+		t.Fatalf("pickSingle() auth = %v, want codex-plus", got)
+	}
+}
+
 func TestSchedulerPick_MixedProvidersUsesWeightedProviderRotationOverReadyCandidates(t *testing.T) {
 	t.Parallel()
 

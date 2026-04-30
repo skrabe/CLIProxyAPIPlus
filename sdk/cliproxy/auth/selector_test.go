@@ -381,6 +381,29 @@ func TestRoundRobinSelectorPick_ThinkingSuffixSharesCursor(t *testing.T) {
 	}
 }
 
+func TestCanonicalModelKey_StripsStackedSuffixes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		model string
+		want  string
+	}{
+		{model: "gpt-5.5(medium)(fast)", want: "gpt-5.5"},
+		{model: "gpt-5.5(fast)(high)", want: "gpt-5.5"},
+		{model: "claude-opus-4-7(xhigh)", want: "claude-opus-4-7"},
+		{model: "plain-model", want: "plain-model"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.model, func(t *testing.T) {
+			if got := canonicalModelKey(tt.model); got != tt.want {
+				t.Fatalf("canonicalModelKey(%q) = %q, want %q", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRoundRobinSelectorPick_CursorKeyCap(t *testing.T) {
 	t.Parallel()
 
