@@ -2,11 +2,12 @@ package registry
 
 import "testing"
 
-func TestCodexFreeModelsExcludeGPT55(t *testing.T) {
+func TestCodexFreeModelsIncludeGPT55(t *testing.T) {
 	model := findModelInfo(GetCodexFreeModels(), "gpt-5.5")
-	if model != nil {
-		t.Fatal("expected codex free tier to NOT include gpt-5.5")
+	if model == nil {
+		t.Fatal("expected codex free tier to include gpt-5.5")
 	}
+	assertGPT55ModelInfo(t, "free", model)
 }
 
 func TestCodexStaticModelsIncludeGPT55(t *testing.T) {
@@ -82,7 +83,7 @@ func assertGPT55ModelInfo(t *testing.T, source string, model *ModelInfo) {
 		t.Fatalf("%s missing thinking support", source)
 	}
 
-	want := []string{"low", "medium", "high", "xhigh"}
+	want := []string{"none", "low", "medium", "high", "xhigh"}
 	if len(model.Thinking.Levels) != len(want) {
 		t.Fatalf("%s thinking level count mismatch: got %d, want %d", source, len(model.Thinking.Levels), len(want))
 	}
@@ -90,5 +91,8 @@ func assertGPT55ModelInfo(t *testing.T, source string, model *ModelInfo) {
 		if model.Thinking.Levels[i] != level {
 			t.Fatalf("%s thinking level %d mismatch: got %q, want %q", source, i, model.Thinking.Levels[i], level)
 		}
+	}
+	if model.Thinking.Default != "none" {
+		t.Fatalf("%s thinking default mismatch: got %q, want %q", source, model.Thinking.Default, "none")
 	}
 }

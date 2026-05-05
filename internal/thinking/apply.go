@@ -157,11 +157,23 @@ func ApplyThinking(body []byte, model string, fromFormat string, toFormat string
 	}
 
 	if !hasThinkingConfig(config) {
-		log.WithFields(log.Fields{
-			"provider": providerFormat,
-			"model":    modelInfo.ID,
-		}).Debug("thinking: no config found, passthrough |")
-		return body, nil
+		if !suffixResult.HasSuffix && modelInfo.Thinking != nil && modelInfo.Thinking.Default != "" {
+			config = defaultThinkingConfig(modelInfo.Thinking.Default)
+			log.WithFields(log.Fields{
+				"provider": providerFormat,
+				"model":    modelInfo.ID,
+				"default":  modelInfo.Thinking.Default,
+				"mode":     config.Mode,
+				"budget":   config.Budget,
+				"level":    config.Level,
+			}).Debug("thinking: applying model default |")
+		} else {
+			log.WithFields(log.Fields{
+				"provider": providerFormat,
+				"model":    modelInfo.ID,
+			}).Debug("thinking: no config found, passthrough |")
+			return body, nil
+		}
 	}
 
 	// 5. Validate and normalize configuration
@@ -238,6 +250,22 @@ func parseSuffixToConfig(rawSuffix, provider, model string) ThinkingConfig {
 		"raw_suffix": rawSuffix,
 	}).Debug("thinking: unknown suffix format, treating as no config |")
 	return ThinkingConfig{}
+}
+
+// defaultThinkingConfig converts a model's default level string into a
+// ThinkingConfig. Mirrors parseSuffixToConfig semantics for "none"/"auto"
+// special values; any other string is treated as a discrete level.
+func defaultThinkingConfig(defaultLevel string) ThinkingConfig {
+	switch strings.ToLower(strings.TrimSpace(defaultLevel)) {
+	case "":
+		return ThinkingConfig{}
+	case "none":
+		return ThinkingConfig{Mode: ModeNone, Budget: 0}
+	case "auto", "-1":
+		return ThinkingConfig{Mode: ModeAuto, Budget: -1}
+	default:
+		return ThinkingConfig{Mode: ModeLevel, Level: ThinkingLevel(strings.ToLower(strings.TrimSpace(defaultLevel)))}
+	}
 }
 
 // applyUserDefinedModel applies thinking configuration for user-defined models

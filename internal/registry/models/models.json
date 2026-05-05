@@ -1305,11 +1305,13 @@
       ],
       "thinking": {
         "levels": [
+          "none",
           "low",
           "medium",
           "high",
           "xhigh"
-        ]
+        ],
+        "default": "none"
       }
     },
     {
@@ -1451,7 +1453,8 @@
           "medium",
           "high",
           "xhigh"
-        ]
+        ],
+        "default": "none"
       }
     },
     {
@@ -1616,7 +1619,8 @@
           "medium",
           "high",
           "xhigh"
-        ]
+        ],
+        "default": "none"
       }
     },
     {
@@ -1781,7 +1785,8 @@
           "medium",
           "high",
           "xhigh"
-        ]
+        ],
+        "default": "none"
       }
     },
     {

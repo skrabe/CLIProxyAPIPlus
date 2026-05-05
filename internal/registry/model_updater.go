@@ -202,7 +202,10 @@ func fetchModelsFromRemote(ctx context.Context) (*staticModelsJSON, string) {
 // evicted on every periodic refresh.
 //
 // Models present in both remote and embedded keep the remote definition —
-// remote wins on updates. Only embedded-exclusive ids are appended.
+// remote wins on updates — UNLESS the id is in embeddedIDPins, in which case
+// the embedded entry replaces the remote one. Pinning is used when local
+// metadata (e.g., extra thinking levels or a thinking.default) differs from
+// the upstream catalog and must survive periodic refresh.
 func mergeEmbeddedAdditions(remote *staticModelsJSON) *staticModelsJSON {
 	if remote == nil {
 		return remote
@@ -217,14 +220,39 @@ func mergeEmbeddedAdditions(remote *staticModelsJSON) *staticModelsJSON {
 		if len(embeddedList) == 0 {
 			return remoteList
 		}
+		embeddedByID := make(map[string]*ModelInfo, len(embeddedList))
+		for _, m := range embeddedList {
+			if m == nil {
+				continue
+			}
+			id := strings.TrimSpace(m.ID)
+			if id == "" {
+				continue
+			}
+			embeddedByID[id] = m
+		}
+
 		seen := make(map[string]struct{}, len(remoteList))
+		out := make([]*ModelInfo, 0, len(remoteList)+len(embeddedList))
 		for _, m := range remoteList {
 			if m == nil {
 				continue
 			}
-			seen[strings.TrimSpace(m.ID)] = struct{}{}
+			id := strings.TrimSpace(m.ID)
+			if id == "" {
+				out = append(out, m)
+				continue
+			}
+			if _, pinned := embeddedIDPins[id]; pinned {
+				if e, ok := embeddedByID[id]; ok {
+					out = append(out, e)
+					seen[id] = struct{}{}
+					continue
+				}
+			}
+			out = append(out, m)
+			seen[id] = struct{}{}
 		}
-		out := remoteList
 		for _, m := range embeddedList {
 			if m == nil {
 				continue
@@ -254,6 +282,13 @@ func mergeEmbeddedAdditions(remote *staticModelsJSON) *staticModelsJSON {
 	remote.Kimi = merge(remote.Kimi, embedded.Kimi)
 	remote.Antigravity = merge(remote.Antigravity, embedded.Antigravity)
 	return remote
+}
+
+// embeddedIDPins lists model ids whose embedded definition must override the
+// remote catalog. Use sparingly: only ids whose local metadata diverges from
+// the upstream router-for-me/models catalog should be pinned.
+var embeddedIDPins = map[string]struct{}{
+	"gpt-5.5": {},
 }
 
 // detectChangedProviders compares two model catalogs and returns provider names
