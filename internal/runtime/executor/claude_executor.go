@@ -2467,9 +2467,17 @@ func applyClaudeCodeCachePattern(body []byte) []byte {
 	}
 
 	// Messages: exactly one marker on the last message's last content block.
-	// Keep this on 5m default — it's the rolling marker, advances every turn,
-	// and the prefix it covers turns over fast enough that 1h would just be
-	// paying the 2x write premium for cache that gets superseded each turn.
+	// 1h TTL on the rolling marker too. Earlier rationale ("rolling marker
+	// advances every turn, 5m fine") only holds when turns reliably land
+	// within 5m of each other. Real Factory sessions have thinking pauses,
+	// code review, slack interruptions — turns regularly >5m apart. Each
+	// such gap on a 5m marker fully evicts the 100k+ message prefix and
+	// pays 1.25x cache-write again. 1h pays 2x once and reads at 0.1x for
+	// up to an hour. Verified live in this proxy (5m turns showed
+	// cache_creation=142k repeatedly with 5m_writes=142k, 1h_writes=0
+	// after 12min idle). Anthropic docs: 1h is "best when follow-up
+	// prompts may be sent beyond 5 minutes." Subscription OAuth honors
+	// 1h per 721b749d. Mirrors what real CC did pre-Apr-2-2026 default flip.
 	if messages := gjson.GetBytes(body, "messages"); messages.IsArray() {
 		msgCount := int(messages.Get("#").Int())
 		if msgCount > 0 {
@@ -2480,7 +2488,7 @@ func applyClaudeCodeCachePattern(body []byte) []byte {
 				cCount := int(content.Get("#").Int())
 				if cCount > 0 {
 					path := fmt.Sprintf("messages.%d.content.%d.cache_control", lastMsgIdx, cCount-1)
-					if updated, err := sjson.SetBytes(body, path, map[string]string{"type": "ephemeral"}); err == nil {
+					if updated, err := sjson.SetBytes(body, path, map[string]string{"type": "ephemeral", "ttl": "1h"}); err == nil {
 						body = updated
 					}
 				}
