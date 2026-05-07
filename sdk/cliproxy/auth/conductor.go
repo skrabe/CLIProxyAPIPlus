@@ -2253,8 +2253,11 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 							if disableCooling {
 								state.NextRetryAfter = time.Time{}
 							} else {
-								next := now.Add(1 * time.Minute)
-								state.NextRetryAfter = next
+								cooldown := 5 * time.Second
+								if statusCode == 500 {
+									cooldown = time.Minute
+								}
+								state.NextRetryAfter = now.Add(cooldown)
 							}
 						default:
 							state.NextRetryAfter = time.Time{}
