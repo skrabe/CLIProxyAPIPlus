@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/andybalholm/brotli v1.0.6
 	github.com/atotto/clipboard v0.1.4
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.10
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
@@ -17,6 +18,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/klauspost/compress v1.17.4
 	github.com/minio/minio-go/v7 v7.0.66
+	github.com/redis/go-redis/v9 v9.19.0
 	github.com/refraction-networking/utls v1.8.2
 	github.com/sirupsen/logrus v1.9.3
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966
@@ -32,10 +34,8 @@ require (
 )
 
 require (
-	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.10 // indirect
 	github.com/aws/smithy-go v1.25.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/redis/go-redis/v9 v9.19.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 )
 
@@ -102,6 +102,6 @@ require (
 	golang.org/x/arch v0.8.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
-	google.golang.org/protobuf v1.34.1 // indirect
+	google.golang.org/protobuf v1.34.1
 	gopkg.in/ini.v1 v1.67.0 // indirect
 )
