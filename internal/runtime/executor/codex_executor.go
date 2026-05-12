@@ -254,10 +254,12 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)
 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
+		helps.RecordAuthHealthResponse(e.cfg, auth, e.Identifier(), httpResp.StatusCode, httpResp.Header, b)
 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
 		err = newCodexStatusErr(httpResp.StatusCode, b)
 		return resp, err
 	}
+	helps.RecordAuthHealthResponse(e.cfg, auth, e.Identifier(), httpResp.StatusCode, httpResp.Header, nil)
 	data, err := io.ReadAll(httpResp.Body)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
@@ -408,10 +410,12 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)
 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
+		helps.RecordAuthHealthResponse(e.cfg, auth, e.Identifier(), httpResp.StatusCode, httpResp.Header, b)
 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
 		err = newCodexStatusErr(httpResp.StatusCode, b)
 		return resp, err
 	}
+	helps.RecordAuthHealthResponse(e.cfg, auth, e.Identifier(), httpResp.StatusCode, httpResp.Header, nil)
 	data, err := io.ReadAll(httpResp.Body)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
@@ -512,10 +516,12 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 			return nil, readErr
 		}
 		helps.AppendAPIResponseChunk(ctx, e.cfg, data)
+		helps.RecordAuthHealthResponse(e.cfg, auth, e.Identifier(), httpResp.StatusCode, httpResp.Header, data)
 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), data))
 		err = newCodexStatusErr(httpResp.StatusCode, data)
 		return nil, err
 	}
+	helps.RecordAuthHealthResponse(e.cfg, auth, e.Identifier(), httpResp.StatusCode, httpResp.Header, nil)
 	out := make(chan cliproxyexecutor.StreamChunk)
 	go func() {
 		defer close(out)
