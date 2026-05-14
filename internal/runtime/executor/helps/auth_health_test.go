@@ -13,31 +13,31 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
-func TestRecordAuthHealthResponseDisabledByDefault(t *testing.T) {
+func TestRecordCodexAuthHealthResponseDisabledByDefault(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &config.Config{AuthHealth: config.AuthHealthConfig{Path: filepath.Join(dir, "auth-health.json")}}
+	cfg := &config.Config{CodexAuthHealth: config.CodexAuthHealthConfig{Path: filepath.Join(dir, "codex-auth-health.json")}}
 	auth := &cliproxyauth.Auth{ID: "codex-test.json", Provider: "codex"}
 
-	RecordAuthHealthResponse(cfg, auth, "codex", http.StatusTooManyRequests, nil, []byte(`{"error":{"type":"usage_limit_reached"}}`))
+	RecordCodexAuthHealthResponse(cfg, auth, "codex", http.StatusTooManyRequests, nil, []byte(`{"error":{"type":"usage_limit_reached"}}`))
 
-	if _, err := os.Stat(cfg.AuthHealth.Path); !os.IsNotExist(err) {
+	if _, err := os.Stat(cfg.CodexAuthHealth.Path); !os.IsNotExist(err) {
 		t.Fatalf("expected no health file when disabled, stat err=%v", err)
 	}
 }
 
-func TestRecordAuthHealthResponseWritesQuotaState(t *testing.T) {
+func TestRecordCodexAuthHealthResponseWritesQuotaState(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "auth-health.json")
+	path := filepath.Join(dir, "codex-auth-health.json")
 	resetAt := time.Now().Add(time.Hour).Unix()
 	headers := http.Header{}
 	headers.Set("X-Codex-Primary-Used-Percent", "98")
 	headers.Set("X-Codex-Primary-Reset-At", itoa64(resetAt))
-	cfg := &config.Config{AuthHealth: config.AuthHealthConfig{Enabled: true, Path: path}}
+	cfg := &config.Config{CodexAuthHealth: config.CodexAuthHealthConfig{Enabled: true, Path: path}}
 	auth := &cliproxyauth.Auth{ID: "codex-test.json", Provider: "codex", Label: "user@example.com"}
 
-	RecordAuthHealthResponse(cfg, auth, "codex", http.StatusOK, headers, nil)
+	RecordCodexAuthHealthResponse(cfg, auth, "codex", http.StatusOK, headers, nil)
 
-	data := readAuthHealthFile(t, path)
+	data := readCodexAuthHealthFile(t, path)
 	state := data.Auths["codex-test.json"]
 	if state.Status != "quota" {
 		t.Fatalf("status = %q, want quota", state.Status)
@@ -50,15 +50,15 @@ func TestRecordAuthHealthResponseWritesQuotaState(t *testing.T) {
 	}
 }
 
-func TestRecordAuthHealthResponseWritesDeadState(t *testing.T) {
+func TestRecordCodexAuthHealthResponseWritesDeadState(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "auth-health.json")
-	cfg := &config.Config{AuthHealth: config.AuthHealthConfig{Enabled: true, Path: path}}
+	path := filepath.Join(dir, "codex-auth-health.json")
+	cfg := &config.Config{CodexAuthHealth: config.CodexAuthHealthConfig{Enabled: true, Path: path}}
 	auth := &cliproxyauth.Auth{FileName: "/tmp/codex-user.json", Provider: "codex", Label: "user@example.com"}
 
-	RecordAuthHealthResponse(cfg, auth, "codex", http.StatusPaymentRequired, nil, []byte(`{"error":{"message":"subscription expired"}}`))
+	RecordCodexAuthHealthResponse(cfg, auth, "codex", http.StatusPaymentRequired, nil, []byte(`{"error":{"message":"subscription expired"}}`))
 
-	data := readAuthHealthFile(t, path)
+	data := readCodexAuthHealthFile(t, path)
 	state := data.Auths["codex-user.json"]
 	if state.Status != "dead" {
 		t.Fatalf("status = %q, want dead", state.Status)
@@ -68,13 +68,13 @@ func TestRecordAuthHealthResponseWritesDeadState(t *testing.T) {
 	}
 }
 
-func readAuthHealthFile(t *testing.T, path string) authHealthFile {
+func readCodexAuthHealthFile(t *testing.T, path string) codexAuthHealthFile {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read health file: %v", err)
 	}
-	var data authHealthFile
+	var data codexAuthHealthFile
 	if err := json.Unmarshal(raw, &data); err != nil {
 		t.Fatalf("unmarshal health file: %v", err)
 	}

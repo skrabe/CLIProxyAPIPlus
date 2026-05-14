@@ -69,8 +69,10 @@ type Config struct {
 	// UsageStatisticsEnabled toggles in-memory usage aggregation; when false, usage data is discarded.
 	UsageStatisticsEnabled bool `yaml:"usage-statistics-enabled" json:"usage-statistics-enabled"`
 
-	// AuthHealth emits a small structured auth health state file for external statuslines.
-	AuthHealth AuthHealthConfig `yaml:"auth-health" json:"auth-health"`
+	// CodexAuthHealth emits a small structured auth-health state file for
+	// Codex auths (used by external statuslines/monitors). Codex-only: other
+	// providers don't write to this file.
+	CodexAuthHealth CodexAuthHealthConfig `yaml:"codex-auth-health" json:"codex-auth-health"`
 
 	// RedisUsageQueueRetentionSeconds controls how long (in seconds) usage queue items
 	// are retained in memory for the Redis RESP interface (LPOP/RPOP).
@@ -216,7 +218,7 @@ type RemoteManagement struct {
 	PanelGitHubRepository string `yaml:"panel-github-repository"`
 }
 
-type AuthHealthConfig struct {
+type CodexAuthHealthConfig struct {
 	Enabled bool   `yaml:"enabled" json:"enabled"`
 	Path    string `yaml:"path,omitempty" json:"path,omitempty"`
 }

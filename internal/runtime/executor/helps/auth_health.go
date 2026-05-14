@@ -16,11 +16,11 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-const authHealthVersion = 1
+const codexAuthHealthVersion = 1
 
-var authHealthMu sync.Mutex
+var codexAuthHealthMu sync.Mutex
 
-type AuthHealthState struct {
+type CodexAuthHealthState struct {
 	Status     string `json:"status"`
 	Source     string `json:"source"`
 	Reason     string `json:"reason"`
@@ -31,28 +31,28 @@ type AuthHealthState struct {
 	Label      string `json:"label,omitempty"`
 }
 
-type authHealthFile struct {
-	Version   int                        `json:"version"`
-	UpdatedAt int64                      `json:"updated_at"`
-	Auths     map[string]AuthHealthState `json:"auths"`
+type codexAuthHealthFile struct {
+	Version   int                             `json:"version"`
+	UpdatedAt int64                           `json:"updated_at"`
+	Auths     map[string]CodexAuthHealthState `json:"auths"`
 }
 
-func RecordAuthHealthResponse(cfg *config.Config, auth *cliproxyauth.Auth, provider string, statusCode int, headers http.Header, body []byte) {
-	if cfg == nil || !cfg.AuthHealth.Enabled || auth == nil {
+func RecordCodexAuthHealthResponse(cfg *config.Config, auth *cliproxyauth.Auth, provider string, statusCode int, headers http.Header, body []byte) {
+	if cfg == nil || !cfg.CodexAuthHealth.Enabled || auth == nil {
 		return
 	}
-	name := authHealthName(auth)
+	name := codexAuthHealthName(auth)
 	if name == "" {
 		return
 	}
-	state := classifyAuthHealth(provider, auth, statusCode, headers, body)
+	state := classifyCodexAuthHealth(provider, auth, statusCode, headers, body)
 	if state.Status == "" {
 		return
 	}
-	writeAuthHealthState(cfg, name, state)
+	writeCodexAuthHealthState(cfg, name, state)
 }
 
-func authHealthName(auth *cliproxyauth.Auth) string {
+func codexAuthHealthName(auth *cliproxyauth.Auth) string {
 	if auth == nil {
 		return ""
 	}
@@ -70,9 +70,9 @@ func authHealthName(auth *cliproxyauth.Auth) string {
 	return strings.TrimSpace(auth.ID)
 }
 
-func classifyAuthHealth(provider string, auth *cliproxyauth.Auth, statusCode int, headers http.Header, body []byte) AuthHealthState {
+func classifyCodexAuthHealth(provider string, auth *cliproxyauth.Auth, statusCode int, headers http.Header, body []byte) CodexAuthHealthState {
 	now := time.Now().Unix()
-	state := AuthHealthState{
+	state := CodexAuthHealthState{
 		Status:     "healthy",
 		Source:     "proxy_health",
 		Reason:     "http_" + strconv.Itoa(statusCode),
@@ -161,53 +161,53 @@ func firstReason(text string, markers ...string) string {
 	return "unknown"
 }
 
-func writeAuthHealthState(cfg *config.Config, name string, state AuthHealthState) {
-	path := authHealthPath(cfg)
+func writeCodexAuthHealthState(cfg *config.Config, name string, state CodexAuthHealthState) {
+	path := codexAuthHealthPath(cfg)
 	if path == "" {
 		return
 	}
-	authHealthMu.Lock()
-	defer authHealthMu.Unlock()
+	codexAuthHealthMu.Lock()
+	defer codexAuthHealthMu.Unlock()
 
-	data := authHealthFile{Version: authHealthVersion, Auths: map[string]AuthHealthState{}}
+	data := codexAuthHealthFile{Version: codexAuthHealthVersion, Auths: map[string]CodexAuthHealthState{}}
 	if raw, errRead := os.ReadFile(path); errRead == nil {
 		_ = json.Unmarshal(raw, &data)
 	}
 	if data.Auths == nil {
-		data.Auths = map[string]AuthHealthState{}
+		data.Auths = map[string]CodexAuthHealthState{}
 	}
-	data.Version = authHealthVersion
+	data.Version = codexAuthHealthVersion
 	data.UpdatedAt = time.Now().Unix()
 	data.Auths[name] = state
 
 	raw, errMarshal := json.MarshalIndent(data, "", "  ")
 	if errMarshal != nil {
-		log.WithError(errMarshal).Debug("auth health: marshal failed")
+		log.WithError(errMarshal).Debug("codex auth health: marshal failed")
 		return
 	}
 	if errMkdir := os.MkdirAll(filepath.Dir(path), 0o755); errMkdir != nil {
-		log.WithError(errMkdir).Debug("auth health: mkdir failed")
+		log.WithError(errMkdir).Debug("codex auth health: mkdir failed")
 		return
 	}
 	tmp := path + ".tmp"
 	if errWrite := os.WriteFile(tmp, raw, 0o600); errWrite != nil {
-		log.WithError(errWrite).Debug("auth health: write failed")
+		log.WithError(errWrite).Debug("codex auth health: write failed")
 		return
 	}
 	if errRename := os.Rename(tmp, path); errRename != nil {
 		_ = os.Remove(tmp)
-		log.WithError(errRename).Debug("auth health: rename failed")
+		log.WithError(errRename).Debug("codex auth health: rename failed")
 	}
 }
 
-func authHealthPath(cfg *config.Config) string {
-	path := strings.TrimSpace(cfg.AuthHealth.Path)
+func codexAuthHealthPath(cfg *config.Config) string {
+	path := strings.TrimSpace(cfg.CodexAuthHealth.Path)
 	if path == "" {
 		authDir := strings.TrimSpace(cfg.AuthDir)
 		if authDir == "" {
 			authDir = config.DefaultAuthDir
 		}
-		path = filepath.Join(authDir, "auth-health.json")
+		path = filepath.Join(authDir, "codex-auth-health.json")
 	}
 	if strings.HasPrefix(path, "~/") {
 		if home, errHome := os.UserHomeDir(); errHome == nil {

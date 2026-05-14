@@ -22,13 +22,14 @@ import (
 )
 
 // isReservedAuthFile reports whether name is a *.json file that lives in the
-// auth directory but is not an auth credential file. The watcher writes
-// auth-health.json itself to record per-auth health snapshots, so it must be
-// skipped by the file-event filter and by the directory scans — otherwise the
-// watcher tries to parse it as a coreauth.Auth and spams an error per request.
+// auth directory but is not an auth credential file. The proxy writes
+// codex-auth-health.json itself to record per-auth health snapshots, so it
+// must be skipped by the file-event filter and by the directory scans —
+// otherwise the watcher tries to parse it as a coreauth.Auth and spams an
+// error per request.
 func isReservedAuthFile(name string) bool {
 	switch strings.ToLower(filepath.Base(name)) {
-	case "auth-health.json":
+	case "codex-auth-health.json":
 		return true
 	}
 	return false
