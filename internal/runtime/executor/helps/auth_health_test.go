@@ -68,6 +68,48 @@ func TestRecordCodexAuthHealthResponseWritesDeadState(t *testing.T) {
 	}
 }
 
+func TestRecordCodexAuthHealthPrunesMissingAuthFiles(t *testing.T) {
+	dir := t.TempDir()
+	authDir := filepath.Join(dir, "auths")
+	if err := os.MkdirAll(authDir, 0o755); err != nil {
+		t.Fatalf("mkdir authDir: %v", err)
+	}
+	present := "codex-present.json"
+	gone := "codex-gone.json"
+	if err := os.WriteFile(filepath.Join(authDir, present), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write present: %v", err)
+	}
+
+	healthPath := filepath.Join(dir, "codex-auth-health.json")
+	seed := codexAuthHealthFile{
+		Version:   codexAuthHealthVersion,
+		UpdatedAt: time.Now().Unix(),
+		Auths: map[string]CodexAuthHealthState{
+			gone: {Status: "dead", Source: "proxy_health", Reason: "token_invalidated", ObservedAt: time.Now().Unix() - 60},
+		},
+	}
+	raw, _ := json.MarshalIndent(seed, "", "  ")
+	if err := os.WriteFile(healthPath, raw, 0o600); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+
+	cfg := &config.Config{
+		AuthDir:         authDir,
+		CodexAuthHealth: config.CodexAuthHealthConfig{Enabled: true, Path: healthPath},
+	}
+	auth := &cliproxyauth.Auth{FileName: filepath.Join(authDir, present), Provider: "codex"}
+
+	RecordCodexAuthHealthResponse(cfg, auth, "codex", http.StatusOK, nil, nil)
+
+	data := readCodexAuthHealthFile(t, healthPath)
+	if _, ok := data.Auths[gone]; ok {
+		t.Fatalf("expected %q to be pruned (auth file gone)", gone)
+	}
+	if _, ok := data.Auths[present]; !ok {
+		t.Fatalf("expected %q to be present (current observation)", present)
+	}
+}
+
 func readCodexAuthHealthFile(t *testing.T, path string) codexAuthHealthFile {
 	t.Helper()
 	raw, err := os.ReadFile(path)

@@ -180,6 +180,20 @@ func writeCodexAuthHealthState(cfg *config.Config, name string, state CodexAuthH
 	data.UpdatedAt = time.Now().Unix()
 	data.Auths[name] = state
 
+	// Drop entries whose auth file no longer exists. The current observation
+	// (name) is preserved unconditionally — it's the freshest signal.
+	authDir := codexAuthHealthAuthDir(cfg)
+	if authDir != "" {
+		for k := range data.Auths {
+			if k == name {
+				continue
+			}
+			if _, errStat := os.Stat(filepath.Join(authDir, k)); os.IsNotExist(errStat) {
+				delete(data.Auths, k)
+			}
+		}
+	}
+
 	raw, errMarshal := json.MarshalIndent(data, "", "  ")
 	if errMarshal != nil {
 		log.WithError(errMarshal).Debug("codex auth health: marshal failed")
@@ -203,11 +217,7 @@ func writeCodexAuthHealthState(cfg *config.Config, name string, state CodexAuthH
 func codexAuthHealthPath(cfg *config.Config) string {
 	path := strings.TrimSpace(cfg.CodexAuthHealth.Path)
 	if path == "" {
-		authDir := strings.TrimSpace(cfg.AuthDir)
-		if authDir == "" {
-			authDir = config.DefaultAuthDir
-		}
-		path = filepath.Join(authDir, "codex-auth-health.json")
+		path = filepath.Join(codexAuthHealthAuthDir(cfg), "codex-auth-health.json")
 	}
 	if strings.HasPrefix(path, "~/") {
 		if home, errHome := os.UserHomeDir(); errHome == nil {
@@ -215,4 +225,17 @@ func codexAuthHealthPath(cfg *config.Config) string {
 		}
 	}
 	return filepath.Clean(path)
+}
+
+func codexAuthHealthAuthDir(cfg *config.Config) string {
+	authDir := strings.TrimSpace(cfg.AuthDir)
+	if authDir == "" {
+		authDir = config.DefaultAuthDir
+	}
+	if strings.HasPrefix(authDir, "~/") {
+		if home, errHome := os.UserHomeDir(); errHome == nil {
+			authDir = filepath.Join(home, strings.TrimPrefix(authDir, "~/"))
+		}
+	}
+	return filepath.Clean(authDir)
 }
