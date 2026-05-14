@@ -21,6 +21,19 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// isReservedAuthFile reports whether name is a *.json file that lives in the
+// auth directory but is not an auth credential file. The watcher writes
+// auth-health.json itself to record per-auth health snapshots, so it must be
+// skipped by the file-event filter and by the directory scans — otherwise the
+// watcher tries to parse it as a coreauth.Auth and spams an error per request.
+func isReservedAuthFile(name string) bool {
+	switch strings.ToLower(filepath.Base(name)) {
+	case "auth-health.json":
+		return true
+	}
+	return false
+}
+
 func (w *Watcher) reloadClients(rescanAuth bool, affectedOAuthProviders []string, forceAuthRefresh bool) {
 	log.Debugf("starting full client load process")
 
@@ -96,6 +109,9 @@ func (w *Watcher) reloadClients(rescanAuth bool, affectedOAuthProviders []string
 					if !strings.HasSuffix(strings.ToLower(name), ".json") {
 						continue
 					}
+					if isReservedAuthFile(name) {
+						continue
+					}
 					fullPath := filepath.Join(resolvedAuthDir, name)
 					if data, errReadFile := os.ReadFile(fullPath); errReadFile == nil && len(data) > 0 {
 						sum := sha256.Sum256(data)
@@ -147,6 +163,9 @@ func (w *Watcher) reloadClients(rescanAuth bool, affectedOAuthProviders []string
 }
 
 func (w *Watcher) addOrUpdateClient(path string) {
+	if isReservedAuthFile(path) {
+		return
+	}
 	data, errRead := os.ReadFile(path)
 	if errRead != nil {
 		log.Errorf("failed to read auth file %s: %v", filepath.Base(path), errRead)
@@ -323,6 +342,9 @@ func (w *Watcher) loadFileClients(cfg *config.Config) int {
 		}
 		name := entry.Name()
 		if !strings.HasSuffix(strings.ToLower(name), ".json") {
+			continue
+		}
+		if isReservedAuthFile(name) {
 			continue
 		}
 		authFileCount++
