@@ -174,15 +174,16 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	body = stripSamplingParamsForOpus47(body, baseModel)
 	body = normalizeClaudeTemperatureForThinking(body)
 
-	// Rewrite cache_control to match Claude Code's actual pattern when cloaking
-	// was applied. Third-party clients (Factory, etc.) often place 2 message-level
-	// markers which Claude Code's source explicitly calls out as wasteful
-	// (services/api/claude.ts:3078: "Exactly one message-level cache_control marker
-	// per request ... with two markers the second-to-last position is protected and
-	// its locals survive an extra turn even though nothing will ever resume from
-	// there"). Also, current cloaking emits system blocks with zero cache_control,
-	// so tools and system aren't cached at all. This function strips client-supplied
-	// cache_control and applies the documented Claude Code pattern.
+	// Normalize cache_control when cloaking was applied. Third-party clients
+	// (Factory, etc.) often place 2 message-level markers which Claude Code's
+	// source explicitly calls out as wasteful (services/api/claude.ts:3078:
+	// "Exactly one message-level cache_control marker per request ... with two
+	// markers the second-to-last position is protected and its locals survive an
+	// extra turn even though nothing will ever resume from there"). Cloaking also
+	// emits system blocks with zero cache_control, so tools/system aren't cached
+	// at all. applyClaudeCodeCachePattern strips the client layout and installs
+	// CC's marker placement with a fixed 1h TTL — the placement mirrors CC, the
+	// TTL is a deliberate economics choice (see the function doc).
 	if cloakedWithBillingHeader(body) {
 		body = applyClaudeCodeCachePattern(body)
 	} else if countCacheControls(body) == 0 {
@@ -366,8 +367,9 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	body = stripSamplingParamsForOpus47(body, baseModel)
 	body = normalizeClaudeTemperatureForThinking(body)
 
-	// Rewrite cache_control to match Claude Code's pattern when cloaking was applied.
-	// See claude.ts:3078 for rationale on the 1-message-marker constraint.
+	// Normalize cache_control to CC's marker placement (fixed 1h TTL) when
+	// cloaking was applied. See applyClaudeCodeCachePattern's doc for the
+	// placement-vs-TTL distinction and the 1-message-marker rationale.
 	if cloakedWithBillingHeader(body) {
 		body = applyClaudeCodeCachePattern(body)
 	} else if countCacheControls(body) == 0 {
@@ -2418,11 +2420,23 @@ func cloakedWithBillingHeader(body []byte) bool {
 	)
 }
 
-// applyClaudeCodeCachePattern rewrites cache_control placement to match what
-// real Claude Code does (services/api/claude.ts:splitSysPromptPrefix +
-// addCacheBreakpoints). Strips any client-supplied markers and installs:
+// applyClaudeCodeCachePattern installs cache_control markers using Claude Code's
+// PLACEMENT pattern (services/api/claude.ts:splitSysPromptPrefix +
+// addCacheBreakpoints), with a fixed 1h TTL.
 //
-//   - system[1..N-1] .cache_control  (skip system[0] billing attribution)
+// The placement mirrors CC. The 1h TTL does NOT — it is a deliberate
+// cache-economics choice, not a CC mirror. Real Claude Code picks TTL per query
+// via server-side experiment gates: 1h for resumable main-agent turns, 5m for
+// subagents and one-shot calls, and 5m entirely when CC telemetry is off. We
+// force 1h on every marker because the dominant workload here is long Factory
+// Droid sessions with >5min think/review gaps, where 1h avoids re-paying the
+// cache write after a 5m marker would have evicted a 100k+ prefix (verified
+// live). It overpays the 2x write on the short/one-shot tail that never
+// resumes; that is an accepted tradeoff for this workload.
+//
+// Strips any client-supplied markers and installs:
+//
+//   - system[1..N-1].cache_control   (skip system[0] billing attribution)
 //   - tools[last].cache_control      (anchor tool definitions)
 //   - messages[last].content[last].cache_control  (exactly ONE message marker,
 //     per claude.ts:3078 "With two markers the second-to-last position is
