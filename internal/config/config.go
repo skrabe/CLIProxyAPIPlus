@@ -158,6 +158,14 @@ type Config struct {
 	// Payload defines default and override rules for provider payload parameters.
 	Payload PayloadConfig `yaml:"payload" json:"payload"`
 
+	// CloakForwardSystemPrompt, when true, replaces the static Claude Code
+	// prompt body with the caller's own system prompt during cloaking. The
+	// billing header and Claude Code identity line are still sent so the
+	// request passes Anthropic's OAuth cloak; the model receives the client's
+	// real system prompt instead of Claude Code's. Top-level because the
+	// per-credential cloak config does not apply to OAuth auth.
+	CloakForwardSystemPrompt bool `yaml:"cloak-forward-system-prompt,omitempty" json:"cloak-forward-system-prompt,omitempty"`
+
 	legacyMigrationPending bool `yaml:"-" json:"-"`
 }
 
