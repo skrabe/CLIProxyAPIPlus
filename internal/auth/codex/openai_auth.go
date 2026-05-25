@@ -12,12 +12,48 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/singleflight"
 )
+
+// codexRefreshReusedBlockTTL is how long we suppress further refresh attempts for
+// a refresh token that the upstream has marked as already-rotated. The credential
+// is effectively dead until re-auth, so we fail fast instead of repeatedly hitting
+// the token endpoint and stalling the calling request.
+const codexRefreshReusedBlockTTL = 6 * time.Hour
+
+var (
+	// codexRefreshGroup deduplicates concurrent refresh calls for the same refresh
+	// token value. OpenAI rotates the refresh token on first use; without this,
+	// N concurrent callers race and N-1 of them poison their refresh tokens with
+	// refresh_token_reused errors.
+	codexRefreshGroup singleflight.Group
+	codexRefreshMu    sync.Mutex
+	codexRefreshBlock = make(map[string]time.Time)
+)
+
+func codexRefreshBlockedUntil(refreshToken string) time.Time {
+	codexRefreshMu.Lock()
+	defer codexRefreshMu.Unlock()
+	return codexRefreshBlock[refreshToken]
+}
+
+func setCodexRefreshBlockedUntil(refreshToken string, until time.Time) {
+	codexRefreshMu.Lock()
+	defer codexRefreshMu.Unlock()
+	codexRefreshBlock[refreshToken] = until
+}
+
+func clearCodexRefreshBlockedUntil(refreshToken string) {
+	codexRefreshMu.Lock()
+	defer codexRefreshMu.Unlock()
+	delete(codexRefreshBlock, refreshToken)
+}
 
 // OAuth configuration constants for OpenAI Codex
 const (
@@ -183,9 +219,36 @@ func (o *CodexAuth) ExchangeCodeForTokensWithRedirect(ctx context.Context, code,
 // RefreshTokens refreshes an access token using a refresh token.
 // This method is called when an access token has expired. It makes a request to the
 // token endpoint to obtain a new set of tokens.
+//
+// Concurrent calls with the same refresh token are deduplicated via singleflight:
+// OpenAI rotates the refresh token on first use, so unsynchronized parallel refreshes
+// would invalidate each other with refresh_token_reused errors. A token that has
+// already been observed as reused is suppressed for codexRefreshReusedBlockTTL so we
+// fail fast instead of hammering the endpoint until the auth is reaped.
 func (o *CodexAuth) RefreshTokens(ctx context.Context, refreshToken string) (*CodexTokenData, error) {
 	if refreshToken == "" {
 		return nil, fmt.Errorf("refresh token is required")
+	}
+	if blockedUntil := codexRefreshBlockedUntil(refreshToken); blockedUntil.After(time.Now()) {
+		return nil, fmt.Errorf("token refresh failed with status 401: {\"error\":{\"code\":\"refresh_token_reused\",\"message\":\"refresh suppressed until %s after prior refresh_token_reused; re-authenticate this account\"}}", blockedUntil.Format(time.RFC3339))
+	}
+
+	result, err, _ := codexRefreshGroup.Do(refreshToken, func() (interface{}, error) {
+		return o.refreshTokensSingleFlight(context.WithoutCancel(ctx), refreshToken)
+	})
+	if err != nil {
+		return nil, err
+	}
+	tokenData, ok := result.(*CodexTokenData)
+	if !ok || tokenData == nil {
+		return nil, fmt.Errorf("token refresh failed: invalid single-flight result")
+	}
+	return tokenData, nil
+}
+
+func (o *CodexAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken string) (*CodexTokenData, error) {
+	if blockedUntil := codexRefreshBlockedUntil(refreshToken); blockedUntil.After(time.Now()) {
+		return nil, fmt.Errorf("token refresh failed with status 401: {\"error\":{\"code\":\"refresh_token_reused\",\"message\":\"refresh suppressed until %s after prior refresh_token_reused; re-authenticate this account\"}}", blockedUntil.Format(time.RFC3339))
 	}
 
 	data := url.Values{
@@ -217,7 +280,11 @@ func (o *CodexAuth) RefreshTokens(ctx context.Context, refreshToken string) (*Co
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token refresh failed with status %d: %s", resp.StatusCode, string(body))
+		errMsg := fmt.Sprintf("token refresh failed with status %d: %s", resp.StatusCode, string(body))
+		if strings.Contains(strings.ToLower(string(body)), "refresh_token_reused") {
+			setCodexRefreshBlockedUntil(refreshToken, time.Now().Add(codexRefreshReusedBlockTTL))
+		}
+		return nil, fmt.Errorf("%s", errMsg)
 	}
 
 	var tokenResp struct {
@@ -231,6 +298,8 @@ func (o *CodexAuth) RefreshTokens(ctx context.Context, refreshToken string) (*Co
 	if err = json.Unmarshal(body, &tokenResp); err != nil {
 		return nil, fmt.Errorf("failed to parse refresh response: %w", err)
 	}
+
+	clearCodexRefreshBlockedUntil(refreshToken)
 
 	// Extract account ID from ID token
 	claims, err := ParseJWTToken(tokenResp.IDToken)
