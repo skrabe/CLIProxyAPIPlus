@@ -52,6 +52,26 @@
       }
     },
     {
+      "id": "claude-opus-4-8",
+      "object": "model",
+      "created": 1779321600,
+      "owned_by": "anthropic",
+      "type": "claude",
+      "display_name": "Claude 4.8 Opus",
+      "description": "Anthropic's most capable model for complex reasoning, long-horizon agentic coding, and high-autonomy work",
+      "context_length": 1000000,
+      "max_completion_tokens": 128000,
+      "thinking": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    {
       "id": "claude-opus-4-7",
       "object": "model",
       "created": 1776931200,
