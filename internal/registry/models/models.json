@@ -62,6 +62,9 @@
       "context_length": 1000000,
       "max_completion_tokens": 128000,
       "thinking": {
+        "max": 128000,
+        "zero_allowed": true,
+        "dynamic_allowed": true,
         "levels": [
           "low",
           "medium",
