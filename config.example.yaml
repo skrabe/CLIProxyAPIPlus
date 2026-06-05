@@ -49,7 +49,7 @@ pprof:
   enable: false
   addr: "127.0.0.1:8316"
 
-# When true, disable high-overhead HTTP middleware features to reduce per-request memory usage under high concurrency.
+# When true, disable high-overhead request logging and HTTP middleware features to reduce per-request memory usage under high concurrency.
 commercial-mode: false
 
 # When true, write application logs to rotating files instead of stdout
@@ -133,6 +133,14 @@ routing:
   session-affinity: false # default: false
   # How long session-to-auth bindings are retained. Default: 1h
   session-affinity-ttl: "1h"
+
+# Codex provider behavior.
+codex:
+  # When true, and routing.strategy is fill-first or routing.session-affinity is true,
+  # remap Codex prompt_cache_key and installation identity per selected auth.
+  # Some superstitious users believe request tracking identifiers can be used
+  # as evidence for TOS enforcement bans; this option only satisfies those odd concerns.
+  identity-confuse: false
 
 # When true, enable authentication for the WebSocket API (/v1/ws).
 ws-auth: true
