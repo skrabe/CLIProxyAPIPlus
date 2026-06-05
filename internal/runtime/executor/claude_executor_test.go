@@ -2221,7 +2221,7 @@ func TestPrepareClaudeOAuthToolNamesForUpstream_MixedCaseWithPrefix(t *testing.T
 		`{"type":"tool_use","id":"toolu_02","name":"glob","input":{}}` +
 		`]}]}`)
 
-	out, reverseMap := prepareClaudeOAuthToolNamesForUpstream(body, "proxy_", false)
+	out, reverseMap := prepareClaudeOAuthToolNamesForUpstream(body, "proxy_", false, false)
 
 	if got := gjson.GetBytes(out, "tools.0.name").String(); got != "proxy_Bash" {
 		t.Fatalf("tools.0.name = %q, want %q", got, "proxy_Bash")
@@ -2237,6 +2237,62 @@ func TestPrepareClaudeOAuthToolNamesForUpstream_MixedCaseWithPrefix(t *testing.T
 	}
 	if len(reverseMap) != 1 || reverseMap["Glob"] != "glob" {
 		t.Fatalf("reverseMap = %v, want {Glob:glob}", reverseMap)
+	}
+}
+
+func TestRemapOAuthToolNamesWithFallback_PascalCase(t *testing.T) {
+	body := []byte(`{` +
+		`"system":[` +
+		`{"type":"text","text":"x-anthropic-billing-header: cc"},` +
+		`{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."},` +
+		`{"type":"text","text":"Use session_search to recall, save with skill_manage. Keep memory tidy."}` +
+		`],` +
+		`"tools":[` +
+		`{"name":"session_search","input_schema":{"type":"object"}},` +
+		`{"name":"skill_manage","input_schema":{"type":"object"}},` +
+		`{"name":"memory","input_schema":{"type":"object"}}` +
+		`],` +
+		`"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"session_search","input":{}}]}]}`)
+
+	// Flag OFF: unchanged behavior — snake stays snake, no renames, system intact.
+	off, offRev := remapOAuthToolNamesWithFallback(body, false)
+	if got := gjson.GetBytes(off, "tools.0.name").String(); got != "session_search" {
+		t.Fatalf("flag off: tools.0.name = %q, want unchanged session_search", got)
+	}
+	if len(offRev) != 0 {
+		t.Fatalf("flag off: reverse map = %v, want empty", offRev)
+	}
+	if got := gjson.GetBytes(off, "system.2.text").String(); !strings.Contains(got, "session_search") {
+		t.Fatalf("flag off: system wrongly modified: %q", got)
+	}
+
+	// Flag ON: PascalCase tools[], tool_use, reverse map, and system mentions.
+	on, onRev := remapOAuthToolNamesWithFallback(body, true)
+	if got := gjson.GetBytes(on, "tools.0.name").String(); got != "SessionSearch" {
+		t.Fatalf("flag on: tools.0.name = %q, want SessionSearch", got)
+	}
+	if got := gjson.GetBytes(on, "tools.1.name").String(); got != "SkillManage" {
+		t.Fatalf("flag on: tools.1.name = %q, want SkillManage", got)
+	}
+	if got := gjson.GetBytes(on, "tools.2.name").String(); got != "Memory" {
+		t.Fatalf("flag on: tools.2.name = %q, want Memory", got)
+	}
+	if got := gjson.GetBytes(on, "messages.0.content.0.name").String(); got != "SessionSearch" {
+		t.Fatalf("flag on: tool_use name = %q, want SessionSearch", got)
+	}
+	if onRev["SessionSearch"] != "session_search" || onRev["SkillManage"] != "skill_manage" {
+		t.Fatalf("flag on: reverse map = %v, missing snake originals", onRev)
+	}
+	sysText := gjson.GetBytes(on, "system.2.text").String()
+	if strings.Contains(sysText, "session_search") || strings.Contains(sysText, "skill_manage") {
+		t.Fatalf("flag on: snake tool mentions remain in system: %q", sysText)
+	}
+	if !strings.Contains(sysText, "SessionSearch") || !strings.Contains(sysText, "SkillManage") {
+		t.Fatalf("flag on: system mentions not re-cased: %q", sysText)
+	}
+	// Single-word common tool name 'memory' must NOT be mangled in prose.
+	if !strings.Contains(sysText, "Keep memory tidy") {
+		t.Fatalf("flag on: single-word 'memory' wrongly re-cased: %q", sysText)
 	}
 }
 

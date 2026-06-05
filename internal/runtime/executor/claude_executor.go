@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -208,7 +209,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	oauthToken := isClaudeOAuthToken(apiKey)
 	var oauthToolNamesReverseMap map[string]string
 	if oauthToken {
-		bodyForUpstream, oauthToolNamesReverseMap = prepareClaudeOAuthToolNamesForUpstream(bodyForUpstream, claudeToolPrefix, auth.ToolPrefixDisabled())
+		bodyForUpstream, oauthToolNamesReverseMap = prepareClaudeOAuthToolNamesForUpstream(bodyForUpstream, claudeToolPrefix, auth.ToolPrefixDisabled(), e.cfg != nil && e.cfg.CloakPascalCaseTools)
 	}
 	// Enable cch signing by default for OAuth tokens (not just experimental flag).
 	// Claude Code always computes cch; missing or invalid cch is a detectable fingerprint.
@@ -391,7 +392,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	oauthToken := isClaudeOAuthToken(apiKey)
 	var oauthToolNamesReverseMap map[string]string
 	if oauthToken {
-		bodyForUpstream, oauthToolNamesReverseMap = prepareClaudeOAuthToolNamesForUpstream(bodyForUpstream, claudeToolPrefix, auth.ToolPrefixDisabled())
+		bodyForUpstream, oauthToolNamesReverseMap = prepareClaudeOAuthToolNamesForUpstream(bodyForUpstream, claudeToolPrefix, auth.ToolPrefixDisabled(), e.cfg != nil && e.cfg.CloakPascalCaseTools)
 	}
 	// Enable cch signing by default for OAuth tokens (not just experimental flag).
 	if oauthToken || experimentalCCHSigningEnabled(e.cfg, auth) {
@@ -633,7 +634,7 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	extraBetas, body = extractAndRemoveBetas(body)
 	extraBetas = ensureTaskBudgetsBeta(extraBetas, body)
 	if isClaudeOAuthToken(apiKey) {
-		body, _ = prepareClaudeOAuthToolNamesForUpstream(body, claudeToolPrefix, auth.ToolPrefixDisabled())
+		body, _ = prepareClaudeOAuthToolNamesForUpstream(body, claudeToolPrefix, auth.ToolPrefixDisabled(), e.cfg != nil && e.cfg.CloakPascalCaseTools)
 	}
 
 	url := fmt.Sprintf("%s/v1/messages/count_tokens?beta=true", baseURL)
@@ -1080,8 +1081,8 @@ func isClaudeOAuthToken(apiKey string) bool {
 // transforms in the same order across request paths. Remap runs before prefixing
 // so any future non-empty prefix still composes correctly with the per-request
 // reverse map.
-func prepareClaudeOAuthToolNamesForUpstream(body []byte, prefix string, prefixDisabled bool) ([]byte, map[string]string) {
-	body, reverseMap := remapOAuthToolNames(body)
+func prepareClaudeOAuthToolNamesForUpstream(body []byte, prefix string, prefixDisabled bool, pascalFallback bool) ([]byte, map[string]string) {
+	body, reverseMap := remapOAuthToolNamesWithFallback(body, pascalFallback)
 	if !prefixDisabled {
 		body = applyClaudeToolPrefix(body, prefix)
 	}
@@ -1106,9 +1107,83 @@ func restoreClaudeOAuthToolNamesFromStreamLine(line []byte, prefix string, prefi
 	return reverseRemapOAuthToolNamesFromStreamLine(line, reverseMap)
 }
 
-// remapOAuthToolNames renames third-party tool names to Claude Code equivalents
+// pascalCaseToolName converts a snake_case / kebab-case tool name to PascalCase
+// (delegate_task -> DelegateTask). Names without separators get their first letter
+// upper-cased; already-PascalCase names are returned unchanged, so it is idempotent
+// and a no-op for clients that already use Claude Code casing.
+func pascalCaseToolName(name string) string {
+	parts := strings.FieldsFunc(name, func(r rune) bool { return r == '_' || r == '-' })
+	var b strings.Builder
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		b.WriteString(strings.ToUpper(p[:1]))
+		b.WriteString(p[1:])
+	}
+	if b.Len() == 0 {
+		return name
+	}
+	return b.String()
+}
+
+// pascalCaseSystemToolMentions rewrites snake_case tool-name mentions inside the
+// system prompt to the PascalCase form already applied to the tools array, so the
+// forwarded system text does not leak third-party snake_case tool identifiers.
+// Only underscore-containing names are rewritten (single common words are left
+// alone to avoid mangling prose), and it is driven entirely by the per-request
+// reverse map, so nothing tool-specific is hardcoded.
+func pascalCaseSystemToolMentions(body []byte, reverseMap map[string]string) []byte {
+	repl := make(map[string]string, len(reverseMap))
+	for renamed, original := range reverseMap {
+		if original != renamed && strings.Contains(original, "_") {
+			repl[original] = renamed
+		}
+	}
+	if len(repl) == 0 {
+		return body
+	}
+	rewrite := func(text string) string {
+		for original, renamed := range repl {
+			re := regexp.MustCompile(`\b` + regexp.QuoteMeta(original) + `\b`)
+			text = re.ReplaceAllString(text, renamed)
+		}
+		return text
+	}
+	system := gjson.GetBytes(body, "system")
+	if system.Type == gjson.String {
+		if newText := rewrite(system.String()); newText != system.String() {
+			body, _ = sjson.SetBytes(body, "system", newText)
+		}
+		return body
+	}
+	if !system.IsArray() {
+		return body
+	}
+	system.ForEach(func(idx, block gjson.Result) bool {
+		t := block.Get("text")
+		if t.Type != gjson.String {
+			return true
+		}
+		if newText := rewrite(t.String()); newText != t.String() {
+			body, _ = sjson.SetBytes(body, fmt.Sprintf("system.%d.text", int(idx.Int())), newText)
+		}
+		return true
+	})
+	return body
+}
+
+// remapOAuthToolNames is the default entry point with no PascalCase fallback,
+// preserving historical behavior for callers that do not opt in.
+func remapOAuthToolNames(body []byte) ([]byte, map[string]string) {
+	return remapOAuthToolNamesWithFallback(body, false)
+}
+
+// remapOAuthToolNamesWithFallback renames third-party tool names to Claude Code equivalents
 // and removes tools without an official counterpart. This prevents Anthropic from
 // fingerprinting the request as a third-party client via tool naming patterns.
+// When pascalFallback is true (cloak-pascalcase-tools), names not in oauthToolRenameMap
+// are PascalCased and their snake_case mentions in the system prompt are re-cased to match.
 //
 // It operates on: tools[].name, tool_choice.name, and all tool_use/tool_reference
 // references in messages. Removed tools' corresponding tool_result blocks are preserved
@@ -1122,7 +1197,7 @@ func restoreClaudeOAuthToolNamesFromStreamLine(line []byte, prefix string, prefi
 // when any OTHER tool in the same request triggered a forward rename (e.g.
 // Amp's `glob`→`Glob`), because the global reverse map contained `Bash`→`bash`
 // regardless of what the client originally sent.
-func remapOAuthToolNames(body []byte) ([]byte, map[string]string) {
+func remapOAuthToolNamesWithFallback(body []byte, pascalFallback bool) ([]byte, map[string]string) {
 	reverseMap := make(map[string]string, len(oauthToolRenameMap))
 	recordRename := func(original, renamed string) {
 		// Preserve the first-seen original name if the same upstream name is
@@ -1166,6 +1241,14 @@ func remapOAuthToolNames(body []byte) ([]byte, map[string]string) {
 					toolJSON = updatedTool
 					recordRename(name, newName)
 				}
+			} else if pascalFallback {
+				if newName := pascalCaseToolName(name); newName != name {
+					updatedTool, err := sjson.Set(toolJSON, "name", newName)
+					if err == nil {
+						toolJSON = updatedTool
+						recordRename(name, newName)
+					}
+				}
 			}
 
 			if toolCount > 0 {
@@ -1190,6 +1273,11 @@ func remapOAuthToolNames(body []byte) ([]byte, map[string]string) {
 		} else if newName, ok := oauthToolRenameMap[tcName]; ok && newName != tcName {
 			body, _ = sjson.SetBytes(body, "tool_choice.name", newName)
 			recordRename(tcName, newName)
+		} else if pascalFallback {
+			if newName := pascalCaseToolName(tcName); newName != tcName {
+				body, _ = sjson.SetBytes(body, "tool_choice.name", newName)
+				recordRename(tcName, newName)
+			}
 		}
 	}
 
@@ -1210,6 +1298,12 @@ func remapOAuthToolNames(body []byte) ([]byte, map[string]string) {
 						path := fmt.Sprintf("messages.%d.content.%d.name", msgIndex.Int(), contentIndex.Int())
 						body, _ = sjson.SetBytes(body, path, newName)
 						recordRename(name, newName)
+					} else if pascalFallback {
+						if newName := pascalCaseToolName(name); newName != name {
+							path := fmt.Sprintf("messages.%d.content.%d.name", msgIndex.Int(), contentIndex.Int())
+							body, _ = sjson.SetBytes(body, path, newName)
+							recordRename(name, newName)
+						}
 					}
 				case "tool_reference":
 					toolName := part.Get("tool_name").String()
@@ -1217,6 +1311,12 @@ func remapOAuthToolNames(body []byte) ([]byte, map[string]string) {
 						path := fmt.Sprintf("messages.%d.content.%d.tool_name", msgIndex.Int(), contentIndex.Int())
 						body, _ = sjson.SetBytes(body, path, newName)
 						recordRename(toolName, newName)
+					} else if pascalFallback {
+						if newName := pascalCaseToolName(toolName); newName != toolName {
+							path := fmt.Sprintf("messages.%d.content.%d.tool_name", msgIndex.Int(), contentIndex.Int())
+							body, _ = sjson.SetBytes(body, path, newName)
+							recordRename(toolName, newName)
+						}
 					}
 				case "tool_result":
 					// Handle nested tool_reference blocks inside tool_result.content[]
@@ -1231,6 +1331,12 @@ func remapOAuthToolNames(body []byte) ([]byte, map[string]string) {
 									nestedPath := fmt.Sprintf("messages.%d.content.%d.content.%d.tool_name", msgIndex.Int(), contentIndex.Int(), nestedIndex.Int())
 									body, _ = sjson.SetBytes(body, nestedPath, newName)
 									recordRename(nestedToolName, newName)
+								} else if pascalFallback {
+									if newName := pascalCaseToolName(nestedToolName); newName != nestedToolName {
+										nestedPath := fmt.Sprintf("messages.%d.content.%d.content.%d.tool_name", msgIndex.Int(), contentIndex.Int(), nestedIndex.Int())
+										body, _ = sjson.SetBytes(body, nestedPath, newName)
+										recordRename(nestedToolName, newName)
+									}
 								}
 							}
 							return true
@@ -1241,6 +1347,10 @@ func remapOAuthToolNames(body []byte) ([]byte, map[string]string) {
 			})
 			return true
 		})
+	}
+
+	if pascalFallback {
+		body = pascalCaseSystemToolMentions(body, reverseMap)
 	}
 
 	return body, reverseMap

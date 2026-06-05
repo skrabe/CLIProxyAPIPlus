@@ -166,6 +166,14 @@ type Config struct {
 	// per-credential cloak config does not apply to OAuth auth.
 	CloakForwardSystemPrompt bool `yaml:"cloak-forward-system-prompt,omitempty" json:"cloak-forward-system-prompt,omitempty"`
 
+	// CloakPascalCaseTools, when true, PascalCases tool names that are not covered
+	// by the built-in rename map (e.g. snake_case `delegate_task` -> `DelegateTask`)
+	// and rewrites their snake_case mentions inside the forwarded system prompt, so
+	// snake_case agents (e.g. Hermes) are not fingerprinted as third-party via tool
+	// naming. Renames are reversed on the response, so the client still receives its
+	// own tool names. Off by default; existing clients (pi/Droid/Amp) are unaffected.
+	CloakPascalCaseTools bool `yaml:"cloak-pascalcase-tools,omitempty" json:"cloak-pascalcase-tools,omitempty"`
+
 	legacyMigrationPending bool `yaml:"-" json:"-"`
 }
 
