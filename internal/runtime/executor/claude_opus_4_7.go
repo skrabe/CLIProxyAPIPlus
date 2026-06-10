@@ -30,19 +30,34 @@ func ensureTaskBudgetsBeta(betas []string, body []byte) []string {
 }
 
 // stripSamplingParamsForOpus47 removes temperature, top_p, and top_k from
-// the request body when the target is Claude Opus 4.7 or later. Opus 4.7's
-// Messages API returns a 400 error when any of these sampling parameters are
-// set to a non-default value; the safe migration path per Anthropic's release
-// notes is to omit them entirely.
+// the request body when the target rejects sampling parameters. Claude Opus 4.7
+// and later, and the Fable/Mythos 5 family, return a 400 error when any of these
+// sampling parameters are set to a non-default value; the safe migration path
+// per Anthropic's release notes is to omit them entirely.
 // See https://docs.anthropic.com/en/docs/about-claude/models/whats-new-claude-4-7#sampling-parameters-removed
 func stripSamplingParamsForOpus47(body []byte, baseModel string) []byte {
-	if !isOpus47OrLater(baseModel) {
+	if !claudeRejectsSamplingParams(baseModel) {
 		return body
 	}
 	for _, path := range []string{"temperature", "top_p", "top_k"} {
 		body, _ = sjson.DeleteBytes(body, path)
 	}
 	return body
+}
+
+// claudeRejectsSamplingParams reports whether the target Claude model rejects
+// temperature/top_p/top_k. True for Opus 4.7+ and the Fable/Mythos 5 family.
+func claudeRejectsSamplingParams(model string) bool {
+	return isOpus47OrLater(model) || isFableOrMythosFamily(model)
+}
+
+// isFableOrMythosFamily reports whether the base model id is a Fable or Mythos
+// model. These share Opus 4.7+'s adaptive-only thinking surface (sampling
+// parameters and manual budget rejected) and additionally cannot disable
+// thinking.
+func isFableOrMythosFamily(model string) bool {
+	lower := strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(lower, "claude-fable-") || strings.HasPrefix(lower, "claude-mythos-")
 }
 
 // isOpus47OrLater reports whether the given base model id matches

@@ -81,6 +81,12 @@ type ThinkingSupport struct {
 	ZeroAllowed bool `json:"zero_allowed,omitempty" yaml:"zero-allowed,omitempty"`
 	// DynamicAllowed indicates whether -1 is a valid value (dynamic thinking budget).
 	DynamicAllowed bool `json:"dynamic_allowed,omitempty" yaml:"dynamic-allowed,omitempty"`
+	// AdaptiveOnly indicates the model only supports adaptive thinking and rejects
+	// an explicit disable (Claude thinking.type="disabled" returns 400). When set,
+	// the Claude applier emits adaptive thinking instead of a disabled block for
+	// "no thinking" configs (e.g., Claude Fable 5 / Mythos 5, where thinking is
+	// always on and cannot be turned off).
+	AdaptiveOnly bool `json:"adaptive_only,omitempty" yaml:"adaptive-only,omitempty"`
 	// Levels defines discrete reasoning effort levels (e.g., "low", "medium", "high").
 	// When set, the model uses level-based reasoning instead of token budgets.
 	Levels []string `json:"levels,omitempty" yaml:"levels,omitempty"`

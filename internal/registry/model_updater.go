@@ -289,6 +289,12 @@ func mergeEmbeddedAdditions(remote *staticModelsJSON) *staticModelsJSON {
 // the upstream router-for-me/models catalog should be pinned.
 var embeddedIDPins = map[string]struct{}{
 	"gpt-5.5": {},
+	// claude-fable-5 is adaptive-only: thinking is always on and disable/manual
+	// budget are rejected upstream. The shared catalog ships a budget-style entry
+	// (min/max + no adaptive_only) that makes the proxy emit thinking.type
+	// "disabled"/"enabled" blocks Fable 5 rejects with 400. Pin our embedded
+	// definition so a periodic remote refresh cannot clobber it.
+	"claude-fable-5": {},
 }
 
 // detectChangedProviders compares two model catalogs and returns provider names

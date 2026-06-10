@@ -28,6 +28,26 @@ func init() {
 	thinking.RegisterProvider("claude", NewApplier())
 }
 
+// adaptiveOnly reports whether the model only supports adaptive thinking and
+// rejects an explicit disable (thinking.type="disabled" returns 400 upstream).
+func adaptiveOnly(modelInfo *registry.ModelInfo) bool {
+	return modelInfo != nil && modelInfo.Thinking != nil && modelInfo.Thinking.AdaptiveOnly
+}
+
+// applyAdaptiveDefault rewrites the body to plain adaptive thinking with no
+// explicit effort, dropping any disabled/budget_tokens/effort the client sent.
+// It is the safe emission for adaptive-only models, which always think and let
+// the upstream default effort apply.
+func applyAdaptiveDefault(body []byte) []byte {
+	result, _ := sjson.SetBytes(body, "thinking.type", "adaptive")
+	result, _ = sjson.DeleteBytes(result, "thinking.budget_tokens")
+	result, _ = sjson.DeleteBytes(result, "output_config.effort")
+	if oc := gjson.GetBytes(result, "output_config"); oc.Exists() && oc.IsObject() && len(oc.Map()) == 0 {
+		result, _ = sjson.DeleteBytes(result, "output_config")
+	}
+	return result
+}
+
 // Apply applies thinking configuration to Claude request body.
 //
 // IMPORTANT: This method expects config to be pre-validated by thinking.ValidateConfig.
@@ -85,6 +105,12 @@ func (a *Applier) Apply(body []byte, config thinking.ThinkingConfig, modelInfo *
 
 	switch config.Mode {
 	case thinking.ModeNone:
+		// Adaptive-only models (Claude Fable 5 / Mythos 5) reject thinking.type
+		// "disabled" with a 400 — thinking is always on. Emit adaptive instead so
+		// a "disable thinking" request from an older client still works.
+		if adaptiveOnly(modelInfo) {
+			return applyAdaptiveDefault(body), nil
+		}
 		result, _ := sjson.SetBytes(body, "thinking.type", "disabled")
 		result, _ = sjson.DeleteBytes(result, "thinking.budget_tokens")
 		result, _ = sjson.DeleteBytes(result, "output_config.effort")
@@ -117,6 +143,9 @@ func (a *Applier) Apply(body []byte, config thinking.ThinkingConfig, modelInfo *
 		// Budget is expected to be pre-validated by ValidateConfig (clamped, ZeroAllowed enforced).
 		// Decide enabled/disabled based on budget value.
 		if config.Budget == 0 {
+			if adaptiveOnly(modelInfo) {
+				return applyAdaptiveDefault(body), nil
+			}
 			result, _ := sjson.SetBytes(body, "thinking.type", "disabled")
 			result, _ = sjson.DeleteBytes(result, "thinking.budget_tokens")
 			result, _ = sjson.DeleteBytes(result, "output_config.effort")

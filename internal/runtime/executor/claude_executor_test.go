@@ -2164,6 +2164,20 @@ func TestStripSamplingParamsForOpus47_AppliesToOpus48(t *testing.T) {
 	}
 }
 
+func TestStripSamplingParamsForOpus47_AppliesToFable5(t *testing.T) {
+	payload := []byte(`{"temperature":0.2,"top_p":0.9,"top_k":10,"messages":[{"role":"user","content":"hi"}]}`)
+	out := stripSamplingParamsForOpus47(payload, "claude-fable-5")
+
+	for _, path := range []string{"temperature", "top_p", "top_k"} {
+		if gjson.GetBytes(out, path).Exists() {
+			t.Fatalf("%s still exists in %s", path, string(out))
+		}
+	}
+	if !gjson.GetBytes(out, "messages.0.content").Exists() {
+		t.Fatalf("messages were removed: %s", string(out))
+	}
+}
+
 func TestRemapOAuthToolNames_TitleCase_NoReverseNeeded(t *testing.T) {
 	body := []byte(`{"tools":[{"name":"Bash","description":"Run shell commands","input_schema":{"type":"object","properties":{"cmd":{"type":"string"}}}}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
 
