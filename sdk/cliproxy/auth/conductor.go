@@ -191,6 +191,12 @@ type Manager struct {
 	refreshCancel context.CancelFunc
 	refreshLoop   *authAutoRefreshLoop
 
+	// refreshInFlight tracks auth IDs whose refresh is currently executing.
+	// Refresh must be single-flight per auth: providers with refresh-token
+	// rotation (e.g. Anthropic) revoke the whole token family when the same
+	// refresh token is presented twice.
+	refreshInFlight sync.Map
+
 	requestPrepareLocks sync.Map
 }
 
@@ -4362,6 +4368,11 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if _, loaded := m.refreshInFlight.LoadOrStore(id, struct{}{}); loaded {
+		log.Debugf("refresh already in flight for auth %s, skipping duplicate trigger", id)
+		return
+	}
+	defer m.refreshInFlight.Delete(id)
 	m.mu.RLock()
 	auth := m.auths[id]
 	var exec ProviderExecutor

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +36,71 @@ func (e schedulerProviderTestExecutor) CountTokens(ctx context.Context, auth *Au
 
 func (e schedulerProviderTestExecutor) HttpRequest(ctx context.Context, auth *Auth, req *http.Request) (*http.Response, error) {
 	return nil, nil
+}
+
+type blockingRefreshTestExecutor struct {
+	schedulerProviderTestExecutor
+	started chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (e *blockingRefreshTestExecutor) Refresh(ctx context.Context, auth *Auth) (*Auth, error) {
+	if e.calls.Add(1) == 1 {
+		close(e.started)
+		<-e.release
+	}
+	return auth, nil
+}
+
+func TestManager_RefreshAuthSingleFlightPerAuth(t *testing.T) {
+	ctx := context.Background()
+	manager := NewManager(nil, &RoundRobinSelector{}, nil)
+	exec := &blockingRefreshTestExecutor{
+		schedulerProviderTestExecutor: schedulerProviderTestExecutor{provider: "claude"},
+		started:                       make(chan struct{}),
+		release:                       make(chan struct{}),
+	}
+	manager.RegisterExecutor(exec)
+
+	auth := &Auth{
+		ID:       "single-flight-refresh",
+		Provider: "claude",
+	}
+	if _, errRegister := manager.Register(ctx, auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		manager.refreshAuth(ctx, auth.ID)
+		close(done)
+	}()
+
+	select {
+	case <-exec.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first refresh did not start")
+	}
+
+	// Duplicate trigger while the first refresh is mid-flight must be a no-op.
+	manager.refreshAuth(ctx, auth.ID)
+	if got := exec.calls.Load(); got != 1 {
+		t.Fatalf("Refresh calls during in-flight refresh = %d, want 1", got)
+	}
+
+	close(exec.release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first refresh did not finish")
+	}
+
+	// After completion the guard must be released so future refreshes run.
+	manager.refreshAuth(ctx, auth.ID)
+	if got := exec.calls.Load(); got != 2 {
+		t.Fatalf("Refresh calls after in-flight refresh completed = %d, want 2", got)
+	}
 }
 
 type unauthorizedRefreshTestExecutor struct {
