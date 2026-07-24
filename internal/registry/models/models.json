@@ -1,6 +1,28 @@
 {
   "claude": [
     {
+      "id": "claude-opus-5",
+      "object": "model",
+      "created": 1784851200,
+      "owned_by": "anthropic",
+      "type": "claude",
+      "display_name": "Claude Opus 5",
+      "description": "Anthropic's flagship Opus model for complex agentic coding and enterprise work, with thinking on by default",
+      "context_length": 1000000,
+      "max_completion_tokens": 128000,
+      "thinking": {
+        "zero_allowed": true,
+        "dynamic_allowed": true,
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    {
       "id": "claude-fable-5",
       "object": "model",
       "created": 1781049600,

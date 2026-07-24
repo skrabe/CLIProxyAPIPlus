@@ -60,28 +60,63 @@ func isFableOrMythosFamily(model string) bool {
 	return strings.HasPrefix(lower, "claude-fable-") || strings.HasPrefix(lower, "claude-mythos-")
 }
 
-// isOpus47OrLater reports whether the given base model id matches
-// claude-opus-4-<n> for n >= 7. Unknown or older Opus families return false.
+// isOpus47OrLater reports whether the given base model id is Claude Opus 4.7 or
+// any later Opus release. This covers both the two-part ids used through the 4.x
+// line (claude-opus-4-7, claude-opus-4-8) and the single-part ids introduced with
+// Opus 5 (claude-opus-5). Unknown or older Opus families return false.
 func isOpus47OrLater(model string) bool {
-	lower := strings.ToLower(strings.TrimSpace(model))
-	const prefix = "claude-opus-4-"
-	if !strings.HasPrefix(lower, prefix) {
+	major, minor, ok := parseOpusVersion(model)
+	if !ok {
 		return false
+	}
+	if major > 4 {
+		return true
+	}
+	return major == 4 && minor >= 7
+}
+
+// parseOpusVersion extracts the major and minor version from a Claude Opus base
+// model id. It accepts the two-part form (claude-opus-4-7 -> 4.7) and the
+// single-part form (claude-opus-5 -> 5.0). A trailing segment of more than two
+// digits is a dated snapshot rather than a minor version, so claude-opus-4-20250514
+// parses as 4.0 (the original Opus 4) and not as 4.20250514.
+func parseOpusVersion(model string) (major, minor int, ok bool) {
+	lower := strings.ToLower(strings.TrimSpace(model))
+	const prefix = "claude-opus-"
+	if !strings.HasPrefix(lower, prefix) {
+		return 0, 0, false
 	}
 	rest := lower[len(prefix):]
-	var digits strings.Builder
-	for _, c := range rest {
-		if c < '0' || c > '9' {
-			break
-		}
-		digits.WriteRune(c)
+	major, width := leadingInt(rest)
+	if width == 0 {
+		return 0, 0, false
 	}
-	if digits.Len() == 0 {
-		return false
+	rest = rest[width:]
+	if !strings.HasPrefix(rest, "-") {
+		return major, 0, true
 	}
-	n, err := strconv.Atoi(digits.String())
+	minor, width = leadingInt(rest[1:])
+	if width == 0 || width > 2 {
+		// No minor segment, or a dated snapshot such as -20250514.
+		return major, 0, true
+	}
+	return major, minor, true
+}
+
+// leadingInt parses the leading decimal digits of s, returning the parsed value
+// and the number of digits consumed. A zero width means s does not start with a
+// digit.
+func leadingInt(s string) (value, width int) {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	if i == 0 {
+		return 0, 0
+	}
+	n, err := strconv.Atoi(s[:i])
 	if err != nil {
-		return false
+		return 0, 0
 	}
-	return n >= 7
+	return n, i
 }

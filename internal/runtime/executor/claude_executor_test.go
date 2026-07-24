@@ -2178,6 +2178,52 @@ func TestStripSamplingParamsForOpus47_AppliesToFable5(t *testing.T) {
 	}
 }
 
+func TestStripSamplingParamsForOpus47_AppliesToOpus5(t *testing.T) {
+	payload := []byte(`{"temperature":0.2,"top_p":0.9,"top_k":10,"messages":[{"role":"user","content":"hi"}]}`)
+	out := stripSamplingParamsForOpus47(payload, "claude-opus-5")
+
+	for _, path := range []string{"temperature", "top_p", "top_k"} {
+		if gjson.GetBytes(out, path).Exists() {
+			t.Fatalf("%s still exists in %s", path, string(out))
+		}
+	}
+	if !gjson.GetBytes(out, "messages.0.content").Exists() {
+		t.Fatalf("messages were removed: %s", string(out))
+	}
+}
+
+// TestIsOpus47OrLater covers both id shapes Anthropic ships: the two-part 4.x ids
+// (claude-opus-4-7) and the single-part ids introduced with Opus 5
+// (claude-opus-5). A trailing segment longer than two digits is a dated snapshot,
+// not a minor version, so claude-opus-4-20250514 is the original Opus 4.
+func TestIsOpus47OrLater(t *testing.T) {
+	cases := []struct {
+		model string
+		want  bool
+	}{
+		{model: "claude-opus-5", want: true},
+		{model: "claude-opus-5-20260724", want: true},
+		{model: "claude-opus-4-8", want: true},
+		{model: "claude-opus-4-7", want: true},
+		{model: "claude-opus-4-6", want: false},
+		{model: "claude-opus-4-5-20251101", want: false},
+		{model: "claude-opus-4-20250514", want: false},
+		{model: "claude-opus-4-1-20250805", want: false},
+		{model: "claude-sonnet-4-6", want: false},
+		// Fable is covered by isFableOrMythosFamily, not this function.
+		{model: "claude-fable-5", want: false},
+		{model: "", want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.model, func(t *testing.T) {
+			if got := isOpus47OrLater(tc.model); got != tc.want {
+				t.Fatalf("isOpus47OrLater(%q) = %v, want %v", tc.model, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRemapOAuthToolNames_TitleCase_NoReverseNeeded(t *testing.T) {
 	body := []byte(`{"tools":[{"name":"Bash","description":"Run shell commands","input_schema":{"type":"object","properties":{"cmd":{"type":"string"}}}}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
 

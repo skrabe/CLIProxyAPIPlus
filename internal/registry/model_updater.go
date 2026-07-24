@@ -295,6 +295,14 @@ var embeddedIDPins = map[string]struct{}{
 	// "disabled"/"enabled" blocks Fable 5 rejects with 400. Pin our embedded
 	// definition so a periodic remote refresh cannot clobber it.
 	"claude-fable-5": {},
+	// claude-opus-5 rejects manual extended thinking (thinking.type="enabled"
+	// with budget_tokens returns 400), so our embedded entry is deliberately
+	// level-only: budget configs normalize to an adaptive effort level instead.
+	// The shared catalog ships Opus entries with a min/max budget range (it did
+	// for claude-opus-4-8), which would turn this model hybrid again and let
+	// budget_tokens through. Pin our definition so a remote refresh cannot
+	// reintroduce that.
+	"claude-opus-5": {},
 }
 
 // detectChangedProviders compares two model catalogs and returns provider names

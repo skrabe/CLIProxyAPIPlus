@@ -53,3 +53,49 @@ func TestMergeEmbeddedAdditions_PinsGPT55(t *testing.T) {
 		}
 	}
 }
+
+// TestMergeEmbeddedAdditions_PinsClaudeOpus5 verifies that claude-opus-5 from the
+// embedded catalog overrides the remote definition. The shared catalog ships Opus
+// entries with a min/max budget range; without the pin a periodic refresh would
+// turn our level-only definition hybrid again and let thinking.budget_tokens reach
+// Anthropic, which rejects manual extended thinking on Opus 5 with a 400.
+func TestMergeEmbeddedAdditions_PinsClaudeOpus5(t *testing.T) {
+	// Simulate a remote catalog that ships claude-opus-5 with a budget range.
+	remote := &staticModelsJSON{
+		Claude: []*ModelInfo{{
+			ID:          "claude-opus-5",
+			Object:      "model",
+			OwnedBy:     "anthropic",
+			DisplayName: "Claude Opus 5",
+			Thinking: &ThinkingSupport{
+				Min:            1024, // <- remote budget range we must not inherit
+				Max:            128000,
+				DynamicAllowed: true,
+				Levels:         []string{"low", "medium", "high", "xhigh", "max"},
+			},
+		}},
+	}
+
+	merged := mergeEmbeddedAdditions(remote)
+
+	var found *ModelInfo
+	for _, m := range merged.Claude {
+		if m != nil && m.ID == "claude-opus-5" {
+			found = m
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("claude-opus-5 missing after merge")
+	}
+	if found.Thinking == nil {
+		t.Fatal("claude-opus-5 missing thinking support after merge")
+	}
+	if found.Thinking.Min != 0 || found.Thinking.Max != 0 {
+		t.Errorf("claude-opus-5 budget range = [%d,%d], want [0,0] (embedded pin should override remote)",
+			found.Thinking.Min, found.Thinking.Max)
+	}
+	if !found.Thinking.ZeroAllowed {
+		t.Errorf("claude-opus-5 ZeroAllowed = false, want true (embedded pin should override remote)")
+	}
+}
