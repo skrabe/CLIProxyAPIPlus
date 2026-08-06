@@ -45,6 +45,28 @@
       }
     },
     {
+      "id": "claude-sonnet-5",
+      "object": "model",
+      "created": 1785974400,
+      "owned_by": "anthropic",
+      "type": "claude",
+      "display_name": "Claude Sonnet 5",
+      "description": "Anthropic's balanced Sonnet model for everyday agentic coding, with thinking on by default",
+      "context_length": 1000000,
+      "max_completion_tokens": 128000,
+      "thinking": {
+        "zero_allowed": true,
+        "dynamic_allowed": true,
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    {
       "id": "claude-haiku-4-5-20251001",
       "object": "model",
       "created": 1759276800,
@@ -60,12 +82,42 @@
       }
     },
     {
+      "id": "claude-haiku-4-5",
+      "object": "model",
+      "created": 1759276800,
+      "owned_by": "anthropic",
+      "type": "claude",
+      "display_name": "Claude 4.5 Haiku (latest)",
+      "context_length": 200000,
+      "max_completion_tokens": 64000,
+      "thinking": {
+        "min": 1024,
+        "max": 128000,
+        "zero_allowed": true
+      }
+    },
+    {
       "id": "claude-sonnet-4-5-20250929",
       "object": "model",
       "created": 1759104000,
       "owned_by": "anthropic",
       "type": "claude",
       "display_name": "Claude 4.5 Sonnet",
+      "context_length": 200000,
+      "max_completion_tokens": 64000,
+      "thinking": {
+        "min": 1024,
+        "max": 128000,
+        "zero_allowed": true
+      }
+    },
+    {
+      "id": "claude-sonnet-4-5",
+      "object": "model",
+      "created": 1759104000,
+      "owned_by": "anthropic",
+      "type": "claude",
+      "display_name": "Claude 4.5 Sonnet (latest)",
       "context_length": 200000,
       "max_completion_tokens": 64000,
       "thinking": {
@@ -177,12 +229,42 @@
       }
     },
     {
+      "id": "claude-opus-4-5",
+      "object": "model",
+      "created": 1761955200,
+      "owned_by": "anthropic",
+      "type": "claude",
+      "display_name": "Claude 4.5 Opus (latest)",
+      "description": "Premium model combining maximum intelligence with practical performance",
+      "context_length": 200000,
+      "max_completion_tokens": 64000,
+      "thinking": {
+        "min": 1024,
+        "max": 128000,
+        "zero_allowed": true
+      }
+    },
+    {
       "id": "claude-opus-4-1-20250805",
       "object": "model",
       "created": 1722945600,
       "owned_by": "anthropic",
       "type": "claude",
       "display_name": "Claude 4.1 Opus",
+      "context_length": 200000,
+      "max_completion_tokens": 32000,
+      "thinking": {
+        "min": 1024,
+        "max": 128000
+      }
+    },
+    {
+      "id": "claude-opus-4-1",
+      "object": "model",
+      "created": 1722945600,
+      "owned_by": "anthropic",
+      "type": "claude",
+      "display_name": "Claude 4.1 Opus (latest)",
       "context_length": 200000,
       "max_completion_tokens": 32000,
       "thinking": {

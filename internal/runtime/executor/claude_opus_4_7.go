@@ -31,9 +31,9 @@ func ensureTaskBudgetsBeta(betas []string, body []byte) []string {
 
 // stripSamplingParamsForOpus47 removes temperature, top_p, and top_k from
 // the request body when the target rejects sampling parameters. Claude Opus 4.7
-// and later, and the Fable/Mythos 5 family, return a 400 error when any of these
-// sampling parameters are set to a non-default value; the safe migration path
-// per Anthropic's release notes is to omit them entirely.
+// and later, Sonnet 5 and later, and the Fable/Mythos 5 family return a 400 error
+// when any of these sampling parameters are set to a non-default value; the safe
+// migration path per Anthropic's release notes is to omit them entirely.
 // See https://docs.anthropic.com/en/docs/about-claude/models/whats-new-claude-4-7#sampling-parameters-removed
 func stripSamplingParamsForOpus47(body []byte, baseModel string) []byte {
 	if !claudeRejectsSamplingParams(baseModel) {
@@ -46,9 +46,10 @@ func stripSamplingParamsForOpus47(body []byte, baseModel string) []byte {
 }
 
 // claudeRejectsSamplingParams reports whether the target Claude model rejects
-// temperature/top_p/top_k. True for Opus 4.7+ and the Fable/Mythos 5 family.
+// temperature/top_p/top_k. True for Opus 4.7+, Sonnet 5+, and the Fable/Mythos
+// 5 family.
 func claudeRejectsSamplingParams(model string) bool {
-	return isOpus47OrLater(model) || isFableOrMythosFamily(model)
+	return isOpus47OrLater(model) || isSonnet5OrLater(model) || isFableOrMythosFamily(model)
 }
 
 // isFableOrMythosFamily reports whether the base model id is a Fable or Mythos
@@ -65,7 +66,7 @@ func isFableOrMythosFamily(model string) bool {
 // line (claude-opus-4-7, claude-opus-4-8) and the single-part ids introduced with
 // Opus 5 (claude-opus-5). Unknown or older Opus families return false.
 func isOpus47OrLater(model string) bool {
-	major, minor, ok := parseOpusVersion(model)
+	major, minor, ok := parseClaudeVersion(model, "claude-opus-")
 	if !ok {
 		return false
 	}
@@ -75,14 +76,23 @@ func isOpus47OrLater(model string) bool {
 	return major == 4 && minor >= 7
 }
 
-// parseOpusVersion extracts the major and minor version from a Claude Opus base
-// model id. It accepts the two-part form (claude-opus-4-7 -> 4.7) and the
-// single-part form (claude-opus-5 -> 5.0). A trailing segment of more than two
-// digits is a dated snapshot rather than a minor version, so claude-opus-4-20250514
-// parses as 4.0 (the original Opus 4) and not as 4.20250514.
-func parseOpusVersion(model string) (major, minor int, ok bool) {
+// isSonnet5OrLater reports whether the given base model id is Claude Sonnet 5 or
+// any later Sonnet release. Sonnet 5 deprecated the sampling parameters
+// (`temperature` is deprecated for this model), while Sonnet 4.6 and earlier
+// still accept them.
+func isSonnet5OrLater(model string) bool {
+	major, _, ok := parseClaudeVersion(model, "claude-sonnet-")
+	return ok && major >= 5
+}
+
+// parseClaudeVersion extracts the major and minor version from a Claude base
+// model id carrying the given family prefix. It accepts the two-part form
+// (claude-opus-4-7 -> 4.7) and the single-part form (claude-opus-5 -> 5.0). A
+// trailing segment of more than two digits is a dated snapshot rather than a
+// minor version, so claude-opus-4-20250514 parses as 4.0 (the original Opus 4)
+// and not as 4.20250514.
+func parseClaudeVersion(model, prefix string) (major, minor int, ok bool) {
 	lower := strings.ToLower(strings.TrimSpace(model))
-	const prefix = "claude-opus-"
 	if !strings.HasPrefix(lower, prefix) {
 		return 0, 0, false
 	}

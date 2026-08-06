@@ -2224,6 +2224,53 @@ func TestIsOpus47OrLater(t *testing.T) {
 	}
 }
 
+// TestIsSonnet5OrLater guards the Sonnet cutover: Sonnet 5 deprecated the
+// sampling parameters ("`temperature` is deprecated for this model"), while
+// Sonnet 4.6 and earlier still accept them.
+func TestIsSonnet5OrLater(t *testing.T) {
+	cases := []struct {
+		model string
+		want  bool
+	}{
+		{model: "claude-sonnet-5", want: true},
+		{model: "claude-sonnet-5-20260806", want: true},
+		{model: "claude-sonnet-6", want: true},
+		{model: "claude-sonnet-4-6", want: false},
+		{model: "claude-sonnet-4-5", want: false},
+		{model: "claude-sonnet-4-5-20250929", want: false},
+		{model: "claude-sonnet-4-20250514", want: false},
+		// Opus is covered by isOpus47OrLater, not this function.
+		{model: "claude-opus-5", want: false},
+		{model: "", want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.model, func(t *testing.T) {
+			if got := isSonnet5OrLater(tc.model); got != tc.want {
+				t.Fatalf("isSonnet5OrLater(%q) = %v, want %v", tc.model, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestStripSamplingParamsForSonnet5 verifies the strip actually fires for
+// Sonnet 5 and stays off for Sonnet 4.6, which still accepts the parameters.
+func TestStripSamplingParamsForSonnet5(t *testing.T) {
+	payload := []byte(`{"temperature":0.7,"top_p":0.9,"top_k":5,"messages":[{"role":"user","content":"hi"}]}`)
+
+	out := stripSamplingParamsForOpus47(payload, "claude-sonnet-5")
+	for _, path := range []string{"temperature", "top_p", "top_k"} {
+		if gjson.GetBytes(out, path).Exists() {
+			t.Fatalf("%s still exists for claude-sonnet-5: %s", path, string(out))
+		}
+	}
+
+	kept := stripSamplingParamsForOpus47(payload, "claude-sonnet-4-6")
+	if !gjson.GetBytes(kept, "temperature").Exists() {
+		t.Fatalf("temperature was stripped for claude-sonnet-4-6: %s", string(kept))
+	}
+}
+
 func TestRemapOAuthToolNames_TitleCase_NoReverseNeeded(t *testing.T) {
 	body := []byte(`{"tools":[{"name":"Bash","description":"Run shell commands","input_schema":{"type":"object","properties":{"cmd":{"type":"string"}}}}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
 

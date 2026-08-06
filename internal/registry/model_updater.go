@@ -303,6 +303,13 @@ var embeddedIDPins = map[string]struct{}{
 	// budget_tokens through. Pin our definition so a remote refresh cannot
 	// reintroduce that.
 	"claude-opus-5": {},
+	// claude-sonnet-5 shares Opus 5's adaptive surface, so our embedded entry is
+	// level-only for the same reason: budget configs normalize to an adaptive
+	// effort level rather than emitting a manual budget_tokens block. The shared
+	// catalog ships Sonnet entries with a min/max budget range (it does for
+	// claude-sonnet-4-6), which would make this model hybrid again. Pin our
+	// definition so a remote refresh cannot reintroduce that.
+	"claude-sonnet-5": {},
 }
 
 // detectChangedProviders compares two model catalogs and returns provider names
