@@ -2495,3 +2495,187 @@ func TestRestoreClaudeOAuthToolNamesFromStreamLine_MixedCaseWithPrefix(t *testin
 		t.Fatalf("Glob should be restored to glob, got: %s", string(out))
 	}
 }
+
+// TestIsFableOrMythos51OrLater guards the 5.1 cutover: forced tool use and
+// preserved thinking apply to Fable/Mythos 5.1 and later, not to Fable 5.
+func TestIsFableOrMythos51OrLater(t *testing.T) {
+	cases := []struct {
+		model string
+		want  bool
+	}{
+		{model: "claude-fable-5-1", want: true},
+		{model: "claude-mythos-5-1", want: true},
+		{model: "claude-fable-5-2", want: true},
+		{model: "claude-fable-6", want: true},
+		{model: "claude-fable-5", want: false},
+		{model: "claude-mythos-5", want: false},
+		{model: "claude-opus-5", want: false},
+		{model: "", want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.model, func(t *testing.T) {
+			if got := isFableOrMythos51OrLater(tc.model); got != tc.want {
+				t.Fatalf("isFableOrMythos51OrLater(%q) = %v, want %v", tc.model, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNormalizeForcedToolChoice_Fable51 verifies that a forced tool_choice is
+// rewritten to "auto" and the instruction it expressed is carried into the
+// conversation as a mid-conversation system message.
+func TestNormalizeForcedToolChoice_Fable51(t *testing.T) {
+	body := []byte(`{"tool_choice":{"type":"tool","name":"get_weather","disable_parallel_tool_use":true},"messages":[{"role":"user","content":"weather in Oslo?"}]}`)
+
+	out := normalizeForcedToolChoice(body, "claude-fable-5-1")
+
+	if got := gjson.GetBytes(out, "tool_choice.type").String(); got != "auto" {
+		t.Fatalf("tool_choice.type = %q, want \"auto\": %s", got, string(out))
+	}
+	if gjson.GetBytes(out, "tool_choice.name").Exists() {
+		t.Fatalf("tool_choice.name must be removed: %s", string(out))
+	}
+	if !gjson.GetBytes(out, "tool_choice.disable_parallel_tool_use").Bool() {
+		t.Fatalf("disable_parallel_tool_use must be preserved: %s", string(out))
+	}
+	last := gjson.GetBytes(out, "messages.1")
+	if last.Get("role").String() != "system" {
+		t.Fatalf("expected a trailing system message, got: %s", string(out))
+	}
+	if !strings.Contains(last.Get("content").String(), "get_weather") {
+		t.Fatalf("instruction must name the forced tool: %s", string(out))
+	}
+}
+
+// TestNormalizeForcedToolChoice_AnyAfterToolResult falls back to a text block on
+// the last user message when the request does not end with a user turn.
+func TestNormalizeForcedToolChoice_AnyAfterToolResult(t *testing.T) {
+	body := []byte(`{"tool_choice":{"type":"any"},"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]},{"role":"assistant","content":[{"type":"text","text":"ok"}]}]}`)
+
+	out := normalizeForcedToolChoice(body, "claude-mythos-5-1")
+
+	if got := gjson.GetBytes(out, "tool_choice.type").String(); got != "auto" {
+		t.Fatalf("tool_choice.type = %q, want \"auto\": %s", got, string(out))
+	}
+	if got := gjson.GetBytes(out, "messages.0.content.1.text").String(); !strings.Contains(got, "calling one of the available tools") {
+		t.Fatalf("instruction was not appended to the last user message: %s", string(out))
+	}
+}
+
+// TestNormalizeForcedToolChoice_LeavesFable5 keeps Fable 5 untouched: it still
+// supports forced tool use.
+func TestNormalizeForcedToolChoice_LeavesFable5(t *testing.T) {
+	body := []byte(`{"tool_choice":{"type":"any"},"messages":[{"role":"user","content":"hi"}]}`)
+
+	out := normalizeForcedToolChoice(body, "claude-fable-5")
+
+	if got := gjson.GetBytes(out, "tool_choice.type").String(); got != "any" {
+		t.Fatalf("tool_choice.type = %q, want \"any\" on claude-fable-5", got)
+	}
+	if gjson.GetBytes(out, "messages.#").Int() != 1 {
+		t.Fatalf("messages must be untouched on claude-fable-5: %s", string(out))
+	}
+}
+
+// TestApplyThinkingBlockBindingDefault opts replayed thinking blocks into
+// drop_block on Fable 5.1 while leaving an explicit client choice alone.
+func TestApplyThinkingBlockBindingDefault(t *testing.T) {
+	withThinking := `{"thinking":{"type":"adaptive"},"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"abc"},{"type":"text","text":"hello"}]},{"role":"user","content":"more"}]}`
+
+	out := applyThinkingBlockBindingDefault([]byte(withThinking), "claude-fable-5-1")
+	if got := gjson.GetBytes(out, "thinking.block_binding.prefix_mismatch_behavior").String(); got != "drop_block" {
+		t.Fatalf("prefix_mismatch_behavior = %q, want \"drop_block\": %s", got, string(out))
+	}
+
+	// Fable 5 does not run the check.
+	out = applyThinkingBlockBindingDefault([]byte(withThinking), "claude-fable-5")
+	if gjson.GetBytes(out, "thinking.block_binding").Exists() {
+		t.Fatalf("block_binding must not be set on claude-fable-5: %s", string(out))
+	}
+
+	// No replayed thinking blocks: nothing to bind.
+	noThinking := `{"thinking":{"type":"adaptive"},"messages":[{"role":"user","content":"hi"}]}`
+	out = applyThinkingBlockBindingDefault([]byte(noThinking), "claude-fable-5-1")
+	if gjson.GetBytes(out, "thinking.block_binding").Exists() {
+		t.Fatalf("block_binding must not be set without thinking blocks: %s", string(out))
+	}
+
+	// An explicit client choice wins.
+	explicit := `{"thinking":{"type":"adaptive","block_binding":{"prefix_mismatch_behavior":"error"}},"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"abc"}]}]}`
+	out = applyThinkingBlockBindingDefault([]byte(explicit), "claude-fable-5-1")
+	if got := gjson.GetBytes(out, "thinking.block_binding.prefix_mismatch_behavior").String(); got != "error" {
+		t.Fatalf("explicit prefix_mismatch_behavior was overwritten: %s", string(out))
+	}
+}
+
+// TestEnsureClaudeFeatureBetas derives the beta headers the Fable 5.1 request
+// features require from the payload itself.
+func TestEnsureClaudeFeatureBetas(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "thinking display updates",
+			body: `{"thinking":{"type":"adaptive","display":"updates"}}`,
+			want: thinkingDisplayUpdatesBeta,
+		},
+		{
+			name: "block binding",
+			body: `{"thinking":{"type":"adaptive","block_binding":{"prefix_mismatch_behavior":"drop_block"}}}`,
+			want: thinkingBindingControlsBeta,
+		},
+		{
+			name: "per-message effort",
+			body: `{"messages":[{"role":"system","content":[],"output_config":{"effort":"low"}}]}`,
+			want: midConversationOutputConfigBeta,
+		},
+		{
+			name: "turn-scoped system message",
+			body: `{"messages":[{"role":"system","clear_at":"next_user_message","content":"check inbox"}]}`,
+			want: midConversationSystemClearAtBeta,
+		},
+		{
+			name: "mid-conversation tool change",
+			body: `{"messages":[{"role":"system","content":[{"type":"tool_removal","tool":{"type":"tool_reference","name":"delete_branch"}}]}]}`,
+			want: midConversationToolChangesBeta,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ensureClaudeFeatureBetas(nil, []byte(tc.body))
+			found := false
+			for _, b := range got {
+				if b == tc.want {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("betas = %v, want %q", got, tc.want)
+			}
+			// Idempotent: a beta already present is not duplicated.
+			again := ensureClaudeFeatureBetas(got, []byte(tc.body))
+			if len(again) != len(got) {
+				t.Fatalf("betas duplicated: %v", again)
+			}
+		})
+	}
+
+	if got := ensureClaudeFeatureBetas(nil, []byte(`{"messages":[{"role":"user","content":"hi"}]}`)); len(got) != 0 {
+		t.Fatalf("plain request must not add betas, got %v", got)
+	}
+}
+
+func TestStripSamplingParamsForOpus47_AppliesToFable51(t *testing.T) {
+	payload := []byte(`{"temperature":0.2,"top_p":0.9,"top_k":10,"messages":[{"role":"user","content":"hi"}]}`)
+	out := stripSamplingParamsForOpus47(payload, "claude-fable-5-1")
+
+	for _, path := range []string{"temperature", "top_p", "top_k"} {
+		if gjson.GetBytes(out, path).Exists() {
+			t.Fatalf("%s still exists in %s", path, string(out))
+		}
+	}
+}

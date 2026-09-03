@@ -201,12 +201,18 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
 	body = ensureModelMaxTokens(body, baseModel)
 
+	// Fable/Mythos 5.1 reject a forced tool_choice; rewrite it to "auto" plus an
+	// explicit instruction before the forced-choice thinking rule below sees it.
+	body = normalizeForcedToolChoice(body, baseModel)
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
 	// Opus 4.7+ rejects non-default temperature/top_p/top_k. Strip them before
 	// normalizeClaudeTemperatureForThinking runs so it stays a no-op.
 	body = stripSamplingParamsForOpus47(body, baseModel)
 	body = normalizeClaudeTemperatureForThinking(body)
+	// Fable/Mythos 5.1 bind replayed thinking blocks to the exact prefix that
+	// produced them; drop mismatched blocks instead of failing the request.
+	body = applyThinkingBlockBindingDefault(body, baseModel)
 
 	// Normalize cache_control when cloaking was applied. Third-party clients
 	// (Factory, etc.) often place 2 message-level markers which Claude Code's
@@ -236,7 +242,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	// Extract betas from body and convert to header
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
-	extraBetas = ensureTaskBudgetsBeta(extraBetas, body)
+	extraBetas = ensureClaudeFeatureBetas(extraBetas, body)
 	bodyForTranslation := body
 	bodyForUpstream := body
 	oauthToken := isClaudeOAuthToken(apiKey)
@@ -397,12 +403,18 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
 	body = ensureModelMaxTokens(body, baseModel)
 
+	// Fable/Mythos 5.1 reject a forced tool_choice; rewrite it to "auto" plus an
+	// explicit instruction before the forced-choice thinking rule below sees it.
+	body = normalizeForcedToolChoice(body, baseModel)
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
 	// Opus 4.7+ rejects non-default temperature/top_p/top_k. Strip them before
 	// normalizeClaudeTemperatureForThinking runs so it stays a no-op.
 	body = stripSamplingParamsForOpus47(body, baseModel)
 	body = normalizeClaudeTemperatureForThinking(body)
+	// Fable/Mythos 5.1 bind replayed thinking blocks to the exact prefix that
+	// produced them; drop mismatched blocks instead of failing the request.
+	body = applyThinkingBlockBindingDefault(body, baseModel)
 
 	// Normalize cache_control to CC's marker placement (fixed 1h TTL) when
 	// cloaking was applied. See applyClaudeCodeCachePattern's doc for the
@@ -422,7 +434,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	// Extract betas from body and convert to header
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
-	extraBetas = ensureTaskBudgetsBeta(extraBetas, body)
+	extraBetas = ensureClaudeFeatureBetas(extraBetas, body)
 	bodyForTranslation := body
 	bodyForUpstream := body
 	oauthToken := isClaudeOAuthToken(apiKey)
@@ -667,11 +679,13 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	body = normalizeCacheControlTTL(body)
 	// Opus 4.7+ rejects non-default temperature/top_p/top_k in count_tokens too.
 	body = stripSamplingParamsForOpus47(body, baseModel)
+	// count_tokens runs the same forced tool_choice validation as /v1/messages.
+	body = normalizeForcedToolChoice(body, baseModel)
 
 	// Extract betas from body and convert to header (for count_tokens too)
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
-	extraBetas = ensureTaskBudgetsBeta(extraBetas, body)
+	extraBetas = ensureClaudeFeatureBetas(extraBetas, body)
 	if isClaudeOAuthToken(apiKey) {
 		body, _ = prepareClaudeOAuthToolNamesForUpstream(body, claudeToolPrefix, auth.ToolPrefixDisabled(), e.cfg != nil && e.cfg.CloakPascalCaseTools)
 	}

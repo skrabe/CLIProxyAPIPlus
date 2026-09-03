@@ -295,6 +295,11 @@ var embeddedIDPins = map[string]struct{}{
 	// "disabled"/"enabled" blocks Fable 5 rejects with 400. Pin our embedded
 	// definition so a periodic remote refresh cannot clobber it.
 	"claude-fable-5": {},
+	// claude-fable-5-1 inherits Fable 5's adaptive-only surface (thinking always
+	// on, disable and manual budget rejected with 400), so it is pinned for the
+	// same reason: the shared catalog ships budget-style Claude entries that
+	// would make the proxy emit disabled/enabled thinking blocks Fable rejects.
+	"claude-fable-5-1": {},
 	// claude-opus-5 rejects manual extended thinking (thinking.type="enabled"
 	// with budget_tokens returns 400), so our embedded entry is deliberately
 	// level-only: budget configs normalize to an adaptive effort level instead.
