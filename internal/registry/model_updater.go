@@ -308,6 +308,11 @@ var embeddedIDPins = map[string]struct{}{
 	// budget_tokens through. Pin our definition so a remote refresh cannot
 	// reintroduce that.
 	"claude-opus-5": {},
+	// claude-opus-5-5 is adaptive-only like Fable 5.1: thinking is always on, and
+	// both thinking.type="disabled" and manual budget_tokens return 400. The
+	// shared catalog ships budget-style Opus entries that would make the proxy
+	// emit those rejected blocks, so pin our definition.
+	"claude-opus-5-5": {},
 	// claude-sonnet-5 shares Opus 5's adaptive surface, so our embedded entry is
 	// level-only for the same reason: budget configs normalize to an adaptive
 	// effort level rather than emitting a manual budget_tokens block. The shared

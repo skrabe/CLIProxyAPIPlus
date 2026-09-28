@@ -212,6 +212,45 @@ func TestStaticDefinitionsIncludeClaudeOpus5(t *testing.T) {
 	}
 }
 
+func TestStaticDefinitionsIncludeClaudeOpus55(t *testing.T) {
+	model := LookupModelInfo("claude-opus-5-5")
+	if model == nil {
+		t.Fatal("expected claude-opus-5-5 static model")
+	}
+	if model.ContextLength != 1000000 {
+		t.Fatalf("context_length = %d, want 1000000", model.ContextLength)
+	}
+	if model.MaxCompletionTokens != 128000 {
+		t.Fatalf("max_completion_tokens = %d, want 128000", model.MaxCompletionTokens)
+	}
+	if model.Thinking == nil {
+		t.Fatal("expected thinking support")
+	}
+	// Unlike Opus 5, Opus 5.5 cannot disable thinking: thinking.type="disabled"
+	// returns 400, so it must be adaptive-only rather than zero-allowed.
+	if !model.Thinking.AdaptiveOnly {
+		t.Fatal("expected AdaptiveOnly=true for claude-opus-5-5")
+	}
+	if model.Thinking.ZeroAllowed {
+		t.Fatal("expected ZeroAllowed=false for claude-opus-5-5")
+	}
+	if !model.Thinking.DynamicAllowed {
+		t.Fatal("expected DynamicAllowed=true for claude-opus-5-5")
+	}
+	if model.Thinking.Min != 0 || model.Thinking.Max != 0 {
+		t.Fatalf("expected no budget range, got min=%d max=%d", model.Thinking.Min, model.Thinking.Max)
+	}
+	want := []string{"low", "medium", "high", "xhigh", "max"}
+	if len(model.Thinking.Levels) != len(want) {
+		t.Fatalf("thinking levels = %v, want %v", model.Thinking.Levels, want)
+	}
+	for i, level := range want {
+		if model.Thinking.Levels[i] != level {
+			t.Fatalf("thinking levels = %v, want %v", model.Thinking.Levels, want)
+		}
+	}
+}
+
 func TestStaticDefinitionsIncludeClaudeFable5(t *testing.T) {
 	model := LookupModelInfo("claude-fable-5")
 	if model == nil {

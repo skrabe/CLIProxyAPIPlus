@@ -14,7 +14,8 @@ import (
 // Fable 5 accepts (adaptive, optionally with an effort level). These cases mirror
 // the configs older clients persist for Opus 4.5/4.6 conversations.
 func TestApplyThinking_Fable5NormalizesToAdaptive(t *testing.T) {
-	for _, model := range []string{"claude-fable-5", "claude-fable-5-1"} {
+	// Claude Opus 5.5 shares the adaptive-only surface, so it runs the same suite.
+	for _, model := range []string{"claude-fable-5", "claude-fable-5-1", "claude-opus-5-5"} {
 		t.Run(model, func(t *testing.T) { testFableNormalizesToAdaptive(t, model) })
 	}
 }

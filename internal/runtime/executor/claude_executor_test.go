@@ -2201,6 +2201,7 @@ func TestIsOpus47OrLater(t *testing.T) {
 		model string
 		want  bool
 	}{
+		{model: "claude-opus-5-5", want: true},
 		{model: "claude-opus-5", want: true},
 		{model: "claude-opus-5-20260724", want: true},
 		{model: "claude-opus-4-8", want: true},
@@ -2666,6 +2667,77 @@ func TestEnsureClaudeFeatureBetas(t *testing.T) {
 
 	if got := ensureClaudeFeatureBetas(nil, []byte(`{"messages":[{"role":"user","content":"hi"}]}`)); len(got) != 0 {
 		t.Fatalf("plain request must not add betas, got %v", got)
+	}
+}
+
+// TestHasBoundThinkingRules guards which models get the forced tool_choice
+// rewrite and the block-binding default: Fable/Mythos 5.1+ and Opus 5.5+, but
+// not Opus 5, Fable 5, or Sonnet 5.
+func TestHasBoundThinkingRules(t *testing.T) {
+	cases := []struct {
+		model string
+		want  bool
+	}{
+		{model: "claude-opus-5-5", want: true},
+		{model: "claude-opus-5-6", want: true},
+		{model: "claude-opus-6", want: true},
+		{model: "claude-fable-5-1", want: true},
+		{model: "claude-mythos-5-1", want: true},
+		{model: "claude-opus-5", want: false},
+		{model: "claude-opus-5-20260724", want: false},
+		{model: "claude-opus-4-8", want: false},
+		{model: "claude-fable-5", want: false},
+		{model: "claude-sonnet-5", want: false},
+		{model: "", want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.model, func(t *testing.T) {
+			if got := hasBoundThinkingRules(tc.model); got != tc.want {
+				t.Fatalf("hasBoundThinkingRules(%q) = %v, want %v", tc.model, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestOpus55RequestRules verifies Opus 5.5 gets Fable 5.1's forced tool_choice
+// rewrite, block-binding default, and sampling-param strip, while Opus 5 keeps
+// forced tool use and no binding default.
+func TestOpus55RequestRules(t *testing.T) {
+	forced := []byte(`{"tool_choice":{"type":"tool","name":"get_weather"},"messages":[{"role":"user","content":"weather?"}]}`)
+
+	out := normalizeForcedToolChoice(forced, "claude-opus-5-5")
+	if got := gjson.GetBytes(out, "tool_choice.type").String(); got != "auto" {
+		t.Fatalf("tool_choice.type = %q, want \"auto\" on claude-opus-5-5: %s", got, string(out))
+	}
+	if got := gjson.GetBytes(out, "messages.1.role").String(); got != "system" {
+		t.Fatalf("expected a mid-conversation system message on claude-opus-5-5: %s", string(out))
+	}
+	out = normalizeForcedToolChoice(forced, "claude-opus-5")
+	if got := gjson.GetBytes(out, "tool_choice.type").String(); got != "tool" {
+		t.Fatalf("tool_choice.type = %q, want \"tool\" on claude-opus-5", got)
+	}
+
+	withThinking := []byte(`{"thinking":{"type":"adaptive"},"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"abc"},{"type":"text","text":"hello"}]},{"role":"user","content":"more"}]}`)
+	out = applyThinkingBlockBindingDefault(withThinking, "claude-opus-5-5")
+	if got := gjson.GetBytes(out, "thinking.block_binding.prefix_mismatch_behavior").String(); got != "drop_block" {
+		t.Fatalf("prefix_mismatch_behavior = %q, want \"drop_block\" on claude-opus-5-5", got)
+	}
+	betas := ensureClaudeFeatureBetas(nil, out)
+	if len(betas) != 1 || betas[0] != thinkingBindingControlsBeta {
+		t.Fatalf("betas = %v, want [%s]", betas, thinkingBindingControlsBeta)
+	}
+	out = applyThinkingBlockBindingDefault(withThinking, "claude-opus-5")
+	if gjson.GetBytes(out, "thinking.block_binding").Exists() {
+		t.Fatalf("block_binding must not be set on claude-opus-5: %s", string(out))
+	}
+
+	sampled := []byte(`{"temperature":0.2,"top_p":0.9,"top_k":10,"messages":[{"role":"user","content":"hi"}]}`)
+	out = stripSamplingParamsForOpus47(sampled, "claude-opus-5-5")
+	for _, path := range []string{"temperature", "top_p", "top_k"} {
+		if gjson.GetBytes(out, path).Exists() {
+			t.Fatalf("%s still exists on claude-opus-5-5: %s", path, string(out))
+		}
 	}
 }
 

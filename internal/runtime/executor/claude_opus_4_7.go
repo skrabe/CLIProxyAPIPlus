@@ -221,8 +221,29 @@ func isFableOrMythos51OrLater(model string) bool {
 	return false
 }
 
+// isOpus55OrLater reports whether the base model id is Claude Opus 5.5 or any
+// later Opus release. Opus 5.5 adopts Fable 5.1's request rules (forced tool use
+// rejected, thinking blocks bound to their conversation prefix), which Opus 5
+// does not have.
+func isOpus55OrLater(model string) bool {
+	major, minor, ok := parseClaudeVersion(model, "claude-opus-")
+	if !ok {
+		return false
+	}
+	return major > 5 || (major == 5 && minor >= 5)
+}
+
+// hasBoundThinkingRules reports whether the base model id rejects forced tool
+// use and binds each thinking block to the conversation prefix that produced
+// it. Anthropic introduced both rules together with Fable 5.1 / Mythos 5.1 and
+// carried them into Opus 5.5.
+func hasBoundThinkingRules(model string) bool {
+	return isFableOrMythos51OrLater(model) || isOpus55OrLater(model)
+}
+
 // normalizeForcedToolChoice rewrites a forced tool_choice into the auto form
-// Claude Fable 5.1 accepts. Fable 5.1 and Mythos 5.1 reject tool_choice
+// Claude Fable 5.1 and Opus 5.5 accept. Fable 5.1, Mythos 5.1, and Opus 5.5
+// reject tool_choice
 // {"type":"any"} and {"type":"tool"} with a 400 (`tool_choice: type "tool" and
 // "any" are not supported for this model.`) because thinking is always on and a
 // forced call would skip it. Anthropic's documented migration is to keep
@@ -231,7 +252,7 @@ func isFableOrMythos51OrLater(model string) bool {
 // instead of being silently dropped. The same validation runs on the token
 // counting endpoint, so this applies there too.
 func normalizeForcedToolChoice(body []byte, baseModel string) []byte {
-	if !isFableOrMythos51OrLater(baseModel) {
+	if !hasBoundThinkingRules(baseModel) {
 		return body
 	}
 	choiceType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "tool_choice.type").String()))
@@ -253,8 +274,8 @@ func normalizeForcedToolChoice(body []byte, baseModel string) []byte {
 
 // appendToolChoiceInstruction adds instruction to the conversation with
 // system-prompt authority. When the request ends with a user turn it is
-// appended as a mid-conversation system message (supported on Fable 5.1 with no
-// beta header), which leaves every earlier byte untouched. Otherwise it falls
+// appended as a mid-conversation system message (supported on Fable 5.1 and
+// Opus 5.5 with no beta header), which leaves every earlier byte untouched. Otherwise it falls
 // back to a text block on the last user message.
 func appendToolChoiceInstruction(body []byte, instruction string) []byte {
 	messages := gjson.GetBytes(body, "messages")
@@ -304,18 +325,18 @@ func appendToolChoiceInstruction(body []byte, instruction string) []byte {
 	return body
 }
 
-// applyThinkingBlockBindingDefault opts a Fable 5.1 request that replays
-// thinking blocks into "drop_block" handling for a preserved-thinking prefix
-// mismatch, unless the client chose its own behavior. Fable 5.1 binds every
-// thinking block to the exact system prompt, tool set, and message history that
-// preceded it, and rejects a replayed block whose prefix changed with a 400 that
+// applyThinkingBlockBindingDefault opts a Fable 5.1 or Opus 5.5 request that
+// replays thinking blocks into "drop_block" handling for a preserved-thinking
+// prefix mismatch, unless the client chose its own behavior. These models bind
+// every thinking block to the exact system prompt, tool set, and message history
+// that preceded it, and reject a replayed block whose prefix changed with a 400 that
 // no retry can clear. A proxy cannot guarantee its clients keep an append-only
 // history — third-party clients routinely inject and then remove per-request
 // reminders — so failing the whole request is the wrong trade. Dropping the
 // affected blocks costs the model that reasoning, is unbilled, and keeps the
 // session alive; the drop is reported back in input_transformations.
 func applyThinkingBlockBindingDefault(body []byte, baseModel string) []byte {
-	if !isFableOrMythos51OrLater(baseModel) {
+	if !hasBoundThinkingRules(baseModel) {
 		return body
 	}
 	if !gjson.GetBytes(body, "thinking.type").Exists() {
