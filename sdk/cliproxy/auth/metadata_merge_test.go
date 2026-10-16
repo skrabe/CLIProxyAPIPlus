@@ -225,7 +225,7 @@ func TestMergeRefreshedAuth(t *testing.T) {
 		}
 		updated := &Auth{
 			ID:       "auth6",
-			ProxyURL: "http://proxy.old:8080", // executor didn't touch ProxyURL, it inherited from base
+			ProxyURL: "http://proxy.old:8080",
 			Metadata: map[string]any{
 				"access_token": "tok-new",
 				"proxy_url":    "http://proxy.old:8080",
