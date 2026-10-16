@@ -16,6 +16,7 @@ import (
 // The content is persisted verbatim under the "service_account" key, together with
 // helper fields for project, location and email to improve logging and discovery.
 type VertexCredentialStorage struct {
+	Metadata map[string]any `json:"-"`
 	// ServiceAccount holds the parsed service account JSON content.
 	ServiceAccount map[string]any `json:"service_account"`
 
@@ -36,6 +37,8 @@ type VertexCredentialStorage struct {
 	Prefix string `json:"prefix,omitempty"`
 }
 
+func (s *VertexCredentialStorage) SetMetadata(metadata map[string]any) { s.Metadata = metadata }
+
 // SaveTokenToFile writes the credential payload to the given file path in JSON format.
 // It ensures the parent directory exists and logs the operation for transparency.
 func (s *VertexCredentialStorage) SaveTokenToFile(authFilePath string) error {
@@ -52,6 +55,16 @@ func (s *VertexCredentialStorage) SaveTokenToFile(authFilePath string) error {
 	if err := os.MkdirAll(filepath.Dir(authFilePath), 0o700); err != nil {
 		return fmt.Errorf("vertex credential: create directory failed: %w", err)
 	}
+
+	data, err := misc.MergeMetadata(s, s.Metadata)
+	if err != nil {
+		return err
+	}
+	raw, errMarshal := json.MarshalIndent(data, "", "  ")
+	if errMarshal != nil {
+		return fmt.Errorf("serialize token metadata: %w", errMarshal)
+	}
+
 	f, err := os.Create(authFilePath)
 	if err != nil {
 		return fmt.Errorf("vertex credential: create file failed: %w", err)
@@ -61,9 +74,7 @@ func (s *VertexCredentialStorage) SaveTokenToFile(authFilePath string) error {
 			log.Errorf("vertex credential: failed to close file: %v", errClose)
 		}
 	}()
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	if err = enc.Encode(s); err != nil {
+	if _, err = f.Write(append(raw, '\n')); err != nil {
 		return fmt.Errorf("vertex credential: encode failed: %w", err)
 	}
 	return nil

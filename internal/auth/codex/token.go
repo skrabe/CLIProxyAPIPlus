@@ -60,6 +60,16 @@ func (ts *CodexTokenStorage) SaveTokenToFile(authFilePath string) error {
 		return fmt.Errorf("failed to create directory: %v", err)
 	}
 
+	// Merge metadata using helper
+	data, errMerge := misc.MergeMetadata(ts, ts.Metadata)
+	if errMerge != nil {
+		return fmt.Errorf("failed to merge metadata: %w", errMerge)
+	}
+	raw, errMarshal := json.Marshal(data)
+	if errMarshal != nil {
+		return fmt.Errorf("serialize token metadata: %w", errMarshal)
+	}
+
 	f, err := os.Create(authFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to create token file: %w", err)
@@ -68,13 +78,7 @@ func (ts *CodexTokenStorage) SaveTokenToFile(authFilePath string) error {
 		_ = f.Close()
 	}()
 
-	// Merge metadata using helper
-	data, errMerge := misc.MergeMetadata(ts, ts.Metadata)
-	if errMerge != nil {
-		return fmt.Errorf("failed to merge metadata: %w", errMerge)
-	}
-
-	if err = json.NewEncoder(f).Encode(data); err != nil {
+	if _, err = f.Write(append(raw, '\n')); err != nil {
 		return fmt.Errorf("failed to write token to file: %w", err)
 	}
 	return nil

@@ -45,6 +45,11 @@ func GetRequestInfo(ctx context.Context) *RequestInfo {
 
 // Auth encapsulates the runtime state and metadata associated with a single credential.
 type Auth struct {
+	RegistrationEpoch   uint64 `json:"-"`
+	CredentialVersion   uint64 `json:"-"`
+	Generation          uint64 `json:"-"`
+	executionSeq        uint64
+	cooldownRecordedSeq uint64
 	// ID uniquely identifies the auth record across restarts.
 	ID string `json:"id"`
 	// Index is a stable runtime identifier derived from auth metadata (not persisted).
@@ -135,6 +140,7 @@ type QuotaState struct {
 
 // ModelState captures the execution state for a specific model under an auth entry.
 type ModelState struct {
+	cooldownRecordedSeq uint64
 	// Status reflects the lifecycle status for this model.
 	Status Status `json:"status"`
 	// StatusMessage provides an optional short description of the status.
@@ -230,7 +236,7 @@ func (a *Auth) Clone() *Auth {
 	if len(a.Metadata) > 0 {
 		copyAuth.Metadata = make(map[string]any, len(a.Metadata))
 		for key, value := range a.Metadata {
-			copyAuth.Metadata[key] = value
+			copyAuth.Metadata[key] = cloneMetadataValue(value)
 		}
 	}
 	if len(a.ModelStates) > 0 {

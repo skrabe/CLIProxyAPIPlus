@@ -45,6 +45,15 @@ func (ts *TokenStorage) SaveTokenToFile(authFilePath string) error {
 	if errMkdirAll := os.MkdirAll(filepath.Dir(authFilePath), 0o700); errMkdirAll != nil {
 		return fmt.Errorf("xai token storage: create directory: %w", errMkdirAll)
 	}
+	data, errMerge := misc.MergeMetadata(ts, ts.Metadata)
+	if errMerge != nil {
+		return fmt.Errorf("xai token storage: merge metadata: %w", errMerge)
+	}
+	raw, errMarshal := json.MarshalIndent(data, "", "  ")
+	if errMarshal != nil {
+		return fmt.Errorf("serialize token metadata: %w", errMarshal)
+	}
+
 	file, err := os.Create(authFilePath)
 	if err != nil {
 		return fmt.Errorf("xai token storage: create token file: %w", err)
@@ -55,13 +64,7 @@ func (ts *TokenStorage) SaveTokenToFile(authFilePath string) error {
 		}
 	}()
 
-	data, errMerge := misc.MergeMetadata(ts, ts.Metadata)
-	if errMerge != nil {
-		return fmt.Errorf("xai token storage: merge metadata: %w", errMerge)
-	}
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	if err = encoder.Encode(data); err != nil {
+	if _, err = file.Write(append(raw, '\n')); err != nil {
 		return fmt.Errorf("xai token storage: write token file: %w", err)
 	}
 	return nil

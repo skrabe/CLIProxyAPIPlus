@@ -102,6 +102,9 @@ func quotaCooldownDisabledForAuth(auth *Auth) bool {
 
 // Result captures execution outcome used to adjust auth state.
 type Result struct {
+	ExecutionSeq      uint64
+	RegistrationEpoch uint64
+	CredentialVersion uint64
 	// AuthID references the auth that produced this result.
 	AuthID string
 	// Provider is copied for convenience when emitting hooks.
@@ -152,13 +155,16 @@ func (NoopHook) OnResult(context.Context, Result) {}
 
 // Manager orchestrates auth lifecycle, selection, execution, and persistence.
 type Manager struct {
-	store     Store
-	executors map[string]ProviderExecutor
-	selector  Selector
-	hook      Hook
-	mu        sync.RWMutex
-	auths     map[string]*Auth
-	scheduler *authScheduler
+	mutationSeq  atomic.Uint64
+	executionSeq atomic.Uint64
+	persistLocks sync.Map
+	store        Store
+	executors    map[string]ProviderExecutor
+	selector     Selector
+	hook         Hook
+	mu           sync.RWMutex
+	auths        map[string]*Auth
+	scheduler    *authScheduler
 	// homeRuntimeAuths caches auths returned by Home so websocket sessions can
 	// reuse an established upstream credential without dispatching every turn.
 	homeRuntimeAuths map[string]map[string]*Auth
@@ -835,7 +841,7 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 				if se, ok := errors.AsType[cliproxyexecutor.StatusError](chunk.Err); ok && se != nil {
 					rerr.HTTPStatus = se.StatusCode()
 				}
-				m.MarkResult(ctx, Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr})
+				m.MarkResult(ctx, Result{AuthID: auth.ID, ExecutionSeq: auth.executionSeq, RegistrationEpoch: auth.RegistrationEpoch, CredentialVersion: auth.CredentialVersion, Provider: provider, Model: resultModel, Success: false, Error: rerr})
 			}
 			if !forward {
 				return false
@@ -865,7 +871,7 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 			}
 		}
 		if !failed {
-			m.MarkResult(ctx, Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: true})
+			m.MarkResult(ctx, Result{AuthID: auth.ID, ExecutionSeq: auth.executionSeq, RegistrationEpoch: auth.RegistrationEpoch, CredentialVersion: auth.CredentialVersion, Provider: provider, Model: resultModel, Success: true})
 		}
 	}()
 	return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: out}
@@ -881,6 +887,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		resultModel := m.stateModelForExecution(auth, routeModel, execModel, pooled)
 		execReq := req
 		execReq.Model = execModel
+		auth = m.beginExecution(auth)
 		streamResult, errStream := executor.ExecuteStream(ctx, auth, execReq, opts)
 		if errStream != nil {
 			if errCtx := ctx.Err(); errCtx != nil {
@@ -890,7 +897,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			if se, ok := errors.AsType[cliproxyexecutor.StatusError](errStream); ok && se != nil {
 				rerr.HTTPStatus = se.StatusCode()
 			}
-			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
+			result := Result{AuthID: auth.ID, ExecutionSeq: auth.executionSeq, RegistrationEpoch: auth.RegistrationEpoch, CredentialVersion: auth.CredentialVersion, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 			result.RetryAfter = retryAfterFromError(errStream)
 			m.MarkResult(ctx, result)
 			if isRequestInvalidError(errStream) {
@@ -911,7 +918,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 				if se, ok := errors.AsType[cliproxyexecutor.StatusError](bootstrapErr); ok && se != nil {
 					rerr.HTTPStatus = se.StatusCode()
 				}
-				result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
+				result := Result{AuthID: auth.ID, ExecutionSeq: auth.executionSeq, RegistrationEpoch: auth.RegistrationEpoch, CredentialVersion: auth.CredentialVersion, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 				result.RetryAfter = retryAfterFromError(bootstrapErr)
 				m.MarkResult(ctx, result)
 				discardStreamChunks(streamResult.Chunks)
@@ -922,7 +929,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 				if se, ok := errors.AsType[cliproxyexecutor.StatusError](bootstrapErr); ok && se != nil {
 					rerr.HTTPStatus = se.StatusCode()
 				}
-				result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
+				result := Result{AuthID: auth.ID, ExecutionSeq: auth.executionSeq, RegistrationEpoch: auth.RegistrationEpoch, CredentialVersion: auth.CredentialVersion, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 				result.RetryAfter = retryAfterFromError(bootstrapErr)
 				m.MarkResult(ctx, result)
 				discardStreamChunks(streamResult.Chunks)
@@ -933,7 +940,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			if se, ok := errors.AsType[cliproxyexecutor.StatusError](bootstrapErr); ok && se != nil {
 				rerr.HTTPStatus = se.StatusCode()
 			}
-			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
+			result := Result{AuthID: auth.ID, ExecutionSeq: auth.executionSeq, RegistrationEpoch: auth.RegistrationEpoch, CredentialVersion: auth.CredentialVersion, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 			result.RetryAfter = retryAfterFromError(bootstrapErr)
 			m.MarkResult(ctx, result)
 			discardStreamChunks(streamResult.Chunks)
@@ -942,7 +949,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 
 		if closed && len(buffered) == 0 {
 			emptyErr := &Error{Code: "empty_stream", Message: "upstream stream closed before first payload", Retryable: true}
-			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: emptyErr}
+			result := Result{AuthID: auth.ID, ExecutionSeq: auth.executionSeq, RegistrationEpoch: auth.RegistrationEpoch, CredentialVersion: auth.CredentialVersion, Provider: provider, Model: resultModel, Success: false, Error: emptyErr}
 			m.MarkResult(ctx, result)
 			if idx < len(execModels)-1 {
 				lastErr = emptyErr
@@ -1152,20 +1159,33 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 	auth.EnsureIndex()
 	authClone := auth.Clone()
 	m.mu.Lock()
-	m.auths[auth.ID] = authClone
+	authClone.RegistrationEpoch = m.mutationSeq.Add(1)
+	authClone.Generation = authClone.RegistrationEpoch
+	authClone.CredentialVersion = authClone.RegistrationEpoch
+	m.auths[auth.ID] = authClone.Clone()
 	m.mu.Unlock()
 	m.rebuildAPIKeyModelAliasFromRuntimeConfig()
-	if m.scheduler != nil {
-		m.scheduler.upsertAuth(authClone)
-	}
+	m.syncAuthScheduler(authClone)
 	m.queueRefreshReschedule(auth.ID)
-	_ = m.persist(ctx, auth)
-	m.hook.OnAuthRegistered(ctx, auth.Clone())
-	return auth.Clone(), nil
+	_ = m.persist(ctx, authClone.Clone())
+	m.hook.OnAuthRegistered(ctx, authClone.Clone())
+	return authClone.Clone(), nil
 }
 
 // Update replaces an existing auth entry and notifies hooks.
 func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
+	return m.updateAuth(ctx, nil, auth, false)
+}
+
+func (m *Manager) UpdateRefreshedAuth(ctx context.Context, base, auth *Auth) (*Auth, error) {
+	return m.updateAuth(ctx, base, auth, true)
+}
+
+func (m *Manager) UpdatePreparedAuth(ctx context.Context, base, auth *Auth) (*Auth, error) {
+	return m.updateAuth(ctx, base, auth, false)
+}
+
+func (m *Manager) updateAuth(ctx context.Context, base, auth *Auth, refresh bool) (*Auth, error) {
 	if auth == nil || auth.ID == "" {
 		return nil, nil
 	}
@@ -1175,6 +1195,25 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 		m.mu.Unlock()
 		return nil, nil
 	}
+	if base != nil {
+		if existing.RegistrationEpoch != base.RegistrationEpoch || existing.CredentialVersion != base.CredentialVersion || CredentialsChanged(base, existing) {
+			current := existing.Clone()
+			m.mu.Unlock()
+			return current, nil
+		}
+		if refresh {
+			auth = MergeRefreshedAuth(base, existing, auth)
+		} else {
+			auth = MergePreparedAuth(base, existing, auth)
+		}
+	}
+	auth = auth.Clone()
+	auth.RegistrationEpoch = existing.RegistrationEpoch
+	auth.CredentialVersion = existing.CredentialVersion
+	if CredentialsChanged(existing, auth) {
+		auth.CredentialVersion = m.mutationSeq.Add(1)
+	}
+	auth.Generation = m.mutationSeq.Add(1)
 	if !auth.indexAssigned && auth.Index == "" {
 		auth.Index = existing.Index
 		auth.indexAssigned = existing.indexAssigned
@@ -1189,16 +1228,14 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	}
 	auth.EnsureIndex()
 	authClone := auth.Clone()
-	m.auths[auth.ID] = authClone
+	m.auths[auth.ID] = authClone.Clone()
 	m.mu.Unlock()
 	m.rebuildAPIKeyModelAliasFromRuntimeConfig()
-	if m.scheduler != nil {
-		m.scheduler.upsertAuth(authClone)
-	}
+	m.syncAuthScheduler(authClone)
 	m.queueRefreshReschedule(auth.ID)
-	_ = m.persist(ctx, auth)
-	m.hook.OnAuthUpdated(ctx, auth.Clone())
-	return auth.Clone(), nil
+	_ = m.persist(ctx, authClone.Clone())
+	m.hook.OnAuthUpdated(ctx, authClone.Clone())
+	return authClone.Clone(), nil
 }
 
 // Remove deletes an auth from runtime state without persisting.
@@ -1278,6 +1315,9 @@ func (m *Manager) Load(ctx context.Context) error {
 			continue
 		}
 		auth.EnsureIndex()
+		auth.RegistrationEpoch = m.mutationSeq.Add(1)
+		auth.CredentialVersion = auth.RegistrationEpoch
+		auth.Generation = auth.RegistrationEpoch
 		m.auths[auth.ID] = auth.Clone()
 	}
 	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
@@ -1446,7 +1486,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		var errPrepare error
 		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
 		if errPrepare != nil {
-			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: &Error{Message: errPrepare.Error()}}
+			result := Result{AuthID: auth.ID, ExecutionSeq: auth.executionSeq, RegistrationEpoch: auth.RegistrationEpoch, CredentialVersion: auth.CredentialVersion, Provider: provider, Model: routeModel, Success: false, Error: &Error{Message: errPrepare.Error()}}
 			if se, ok := errors.AsType[cliproxyexecutor.StatusError](errPrepare); ok && se != nil {
 				result.Error.HTTPStatus = se.StatusCode()
 			}
@@ -1459,8 +1499,9 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			resultModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
 			execReq := req
 			execReq.Model = upstreamModel
+			auth = m.beginExecution(auth)
 			resp, errExec := executor.Execute(execCtx, auth, execReq, opts)
-			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: errExec == nil}
+			result := Result{AuthID: auth.ID, ExecutionSeq: auth.executionSeq, RegistrationEpoch: auth.RegistrationEpoch, CredentialVersion: auth.CredentialVersion, Provider: provider, Model: resultModel, Success: errExec == nil}
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
 					return cliproxyexecutor.Response{}, errCtx
@@ -1545,7 +1586,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		var errPrepare error
 		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
 		if errPrepare != nil {
-			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: &Error{Message: errPrepare.Error()}}
+			result := Result{AuthID: auth.ID, ExecutionSeq: auth.executionSeq, RegistrationEpoch: auth.RegistrationEpoch, CredentialVersion: auth.CredentialVersion, Provider: provider, Model: routeModel, Success: false, Error: &Error{Message: errPrepare.Error()}}
 			if se, ok := errors.AsType[cliproxyexecutor.StatusError](errPrepare); ok && se != nil {
 				result.Error.HTTPStatus = se.StatusCode()
 			}
@@ -1558,8 +1599,9 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			resultModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
 			execReq := req
 			execReq.Model = upstreamModel
+			auth = m.beginExecution(auth)
 			resp, errExec := executor.CountTokens(execCtx, auth, execReq, opts)
-			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: errExec == nil}
+			result := Result{AuthID: auth.ID, ExecutionSeq: auth.executionSeq, RegistrationEpoch: auth.RegistrationEpoch, CredentialVersion: auth.CredentialVersion, Provider: provider, Model: resultModel, Success: errExec == nil}
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
 					return cliproxyexecutor.Response{}, errCtx
@@ -1642,7 +1684,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		var errPrepare error
 		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
 		if errPrepare != nil {
-			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: &Error{Message: errPrepare.Error()}}
+			result := Result{AuthID: auth.ID, ExecutionSeq: auth.executionSeq, RegistrationEpoch: auth.RegistrationEpoch, CredentialVersion: auth.CredentialVersion, Provider: provider, Model: routeModel, Success: false, Error: &Error{Message: errPrepare.Error()}}
 			if se, ok := errors.AsType[cliproxyexecutor.StatusError](errPrepare); ok && se != nil {
 				result.Error.HTTPStatus = se.StatusCode()
 			}
@@ -1792,7 +1834,7 @@ func (m *Manager) prepareRequestAuth(ctx context.Context, executor ProviderExecu
 		return target, nil
 	}
 
-	updated, errPrepare := preparer.PrepareRequestAuth(ctx, target)
+	updated, errPrepare := preparer.PrepareRequestAuth(ctx, target.Clone())
 	if errPrepare != nil {
 		return auth, errPrepare
 	}
@@ -1800,7 +1842,7 @@ func (m *Manager) prepareRequestAuth(ctx context.Context, executor ProviderExecu
 		return target, nil
 	}
 
-	saved, errUpdate := m.Update(ctx, updated)
+	saved, errUpdate := m.UpdatePreparedAuth(ctx, target, updated)
 	if errUpdate != nil {
 		return updated, errUpdate
 	}
@@ -2374,6 +2416,10 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 
 	m.mu.Lock()
 	if auth, ok := m.auths[result.AuthID]; ok && auth != nil {
+		if (result.RegistrationEpoch != 0 && result.RegistrationEpoch != auth.RegistrationEpoch) || (result.CredentialVersion != 0 && result.CredentialVersion != auth.CredentialVersion) {
+			m.mu.Unlock()
+			return
+		}
 		now := time.Now()
 		auth.recordRecentRequest(now, result.Success)
 		if result.Success {
@@ -2382,23 +2428,35 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			auth.Failed++
 		}
 
-		if result.Success {
+		retainCooldown := result.ExecutionSeq > 0 && auth.cooldownRecordedSeq >= result.ExecutionSeq && authCooldownActive(auth, now)
+		if result.ExecutionSeq > 0 {
 			if result.Model != "" {
-				state := ensureModelState(auth, result.Model)
-				resetModelState(state, now)
-				updateAggregatedAvailability(auth, now)
-				if !hasModelError(auth, now) {
-					auth.LastError = nil
-					auth.StatusMessage = ""
-					auth.Status = StatusActive
+				if state := auth.ModelStates[result.Model]; state != nil {
+					retainCooldown = retainCooldown || (state.cooldownRecordedSeq >= result.ExecutionSeq && modelCooldownActive(state, now))
 				}
-				auth.UpdatedAt = now
-				shouldResumeModel = true
-				clearModelQuota = true
 			} else {
-				clearAuthStateOnSuccess(auth, now)
+				retainCooldown = auth.cooldownRecordedSeq >= result.ExecutionSeq && authCooldownActive(auth, now)
 			}
-		} else {
+		}
+		if result.Success {
+			if !retainCooldown && !auth.Disabled && auth.Status != StatusDisabled {
+				if result.Model != "" {
+					state := ensureModelState(auth, result.Model)
+					resetModelState(state, now)
+					updateAggregatedAvailability(auth, now)
+					if !hasModelError(auth, now) {
+						auth.LastError = nil
+						auth.StatusMessage = ""
+						auth.Status = StatusActive
+					}
+					auth.UpdatedAt = now
+					shouldResumeModel = true
+					clearModelQuota = true
+				} else {
+					clearAuthStateOnSuccess(auth, now)
+				}
+			}
+		} else if !auth.Disabled && auth.Status != StatusDisabled {
 			if result.Model != "" {
 				if !isRequestScopedNotFoundResultError(result.Error) {
 					disableCooling := quotaCooldownDisabledForAuth(auth)
@@ -2502,22 +2560,23 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 						}
 					}
 
+					state.cooldownRecordedSeq = m.executionSeq.Load()
 					auth.Status = StatusError
 					auth.UpdatedAt = now
 					updateAggregatedAvailability(auth, now)
 				}
 			} else {
 				applyAuthFailureState(auth, result.Error, result.RetryAfter, now)
+				auth.cooldownRecordedSeq = m.executionSeq.Load()
 			}
 		}
 
-		_ = m.persist(ctx, auth)
+		auth.Generation = m.mutationSeq.Add(1)
+		_ = m.persist(ctx, auth.Clone())
 		authSnapshot = auth.Clone()
 	}
 	m.mu.Unlock()
-	if m.scheduler != nil && authSnapshot != nil {
-		m.scheduler.upsertAuth(authSnapshot)
-	}
+	m.syncAuthScheduler(authSnapshot)
 
 	if clearModelQuota && result.Model != "" {
 		registry.GetGlobalRegistry().ClearModelQuotaExceeded(result.AuthID, result.Model)
@@ -3989,8 +4048,9 @@ func (m *Manager) tryAntigravityCreditsExecute(ctx context.Context, req cliproxy
 			resultModel := m.stateModelForExecution(c.auth, routeModel, upstreamModel, len(models) > 1)
 			execReq := req
 			execReq.Model = upstreamModel
+			c.auth = m.beginExecution(c.auth)
 			resp, errExec := c.executor.Execute(creditsCtx, c.auth, execReq, creditsOpts)
-			result := Result{AuthID: c.auth.ID, Provider: c.provider, Model: resultModel, Success: errExec == nil}
+			result := Result{AuthID: c.auth.ID, ExecutionSeq: c.auth.executionSeq, RegistrationEpoch: c.auth.RegistrationEpoch, CredentialVersion: c.auth.CredentialVersion, Provider: c.provider, Model: resultModel, Success: errExec == nil}
 			if errExec != nil {
 				result.Error = &Error{Message: errExec.Error()}
 				if se, ok := errors.AsType[cliproxyexecutor.StatusError](errExec); ok && se != nil {
@@ -4045,9 +4105,6 @@ func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 	if m.store == nil || auth == nil {
 		return nil
 	}
-	if shouldSkipPersist(ctx) {
-		return nil
-	}
 	if auth.Attributes != nil {
 		if v := strings.ToLower(strings.TrimSpace(auth.Attributes["runtime_only"])); v == "true" {
 			return nil
@@ -4057,7 +4114,21 @@ func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 	if auth.Metadata == nil {
 		return nil
 	}
+	lockValue, _ := m.persistLocks.LoadOrStore(auth.ID, &authPersistLock{})
+	lock := lockValue.(*authPersistLock)
+	lock.mu.Lock()
+	defer lock.mu.Unlock()
+	if auth.Generation < lock.generation {
+		return nil
+	}
+	if shouldSkipPersist(ctx) {
+		lock.generation = auth.Generation
+		return nil
+	}
 	_, err := m.store.Save(ctx, auth)
+	if err == nil {
+		lock.generation = auth.Generation
+	}
 	return err
 }
 
@@ -4385,7 +4456,7 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 	if auth == nil || exec == nil {
 		return
 	}
-	updated, err := exec.Refresh(ctx, cloned)
+	updated, err := exec.Refresh(ctx, cloned.Clone())
 	if err != nil && errors.Is(err, context.Canceled) {
 		log.Debugf("refresh canceled for %s, %s", auth.Provider, auth.ID)
 		return
@@ -4396,7 +4467,7 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 		unauthorized := isUnauthorizedError(err)
 		shouldReschedule := false
 		m.mu.Lock()
-		if current := m.auths[id]; current != nil {
+		if current := m.auths[id]; current != nil && current.RegistrationEpoch == cloned.RegistrationEpoch && current.CredentialVersion == cloned.CredentialVersion && !CredentialsChanged(cloned, current) && !current.Disabled && current.Status != StatusDisabled {
 			current.LastError = refreshErrorFromError(err)
 			if unauthorized {
 				current.NextRefreshAfter = time.Time{}
@@ -4433,7 +4504,7 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 	if m.shouldRefresh(updated, now) {
 		updated.NextRefreshAfter = now.Add(refreshIneffectiveBackoff)
 	}
-	_, _ = m.Update(ctx, updated)
+	_, _ = m.UpdateRefreshedAuth(ctx, cloned, updated)
 }
 
 func (m *Manager) executorFor(provider string) ProviderExecutor {
