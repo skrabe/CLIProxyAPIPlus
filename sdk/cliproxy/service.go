@@ -504,6 +504,7 @@ func (s *Service) applyConfigUpdate(newCfg *config.Config) {
 		return
 	}
 
+	registry.UpdateModelCatalogSources(newCfg.Models, newCfg.Home.Enabled)
 	nextStrategy := strings.ToLower(strings.TrimSpace(newCfg.Routing.Strategy))
 	normalizeStrategy := func(strategy string) string {
 		switch strategy {
@@ -765,6 +766,11 @@ func (s *Service) Run(ctx context.Context) error {
 		ctx = context.Background()
 	}
 
+	catalogCtx, cancelCatalogs := context.WithCancel(ctx)
+	defer cancelCatalogs()
+	if s.cfg != nil {
+		registry.StartModelCatalogUpdaters(catalogCtx, s.cfg.Models, s.cfg.Home.Enabled)
+	}
 	usage.StartDefault(ctx)
 	homeEnabled := s.cfg != nil && s.cfg.Home.Enabled
 	if homeEnabled {

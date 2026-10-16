@@ -1,0 +1,173 @@
+package management
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+)
+
+func newIssue6631Handler(t *testing.T, raw string) (*Handler, string, *gin.Engine) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if errWrite := os.WriteFile(path, []byte(raw), 0o600); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+	cfg, errLoad := config.LoadConfig(path)
+	if errLoad != nil {
+		t.Fatal(errLoad)
+	}
+	h := &Handler{cfg: cfg, configFilePath: path}
+	router := gin.New()
+	router.PUT("/v0/management/request-retry", h.PutRequestRetry)
+	router.PUT("/v0/management/max-retry-interval", h.PutMaxRetryInterval)
+	return h, path, router
+}
+
+func putIssue6631Value(t *testing.T, router *gin.Engine, url, body string) {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, url, strings.NewReader(body)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("PUT %s: status=%d body=%s", url, recorder.Code, recorder.Body.String())
+	}
+}
+
+func readIssue6631Disk(t *testing.T, path string) *config.Config {
+	t.Helper()
+	data, errRead := os.ReadFile(path)
+	if errRead != nil {
+		t.Fatal(errRead)
+	}
+	cfg, errParse := config.ParseConfigBytes(data)
+	if errParse != nil {
+		t.Fatal(errParse)
+	}
+	return cfg
+}
+
+func TestSetConfigIgnoresConfigLoadedBeforeManagementSave_Issue6631(t *testing.T) {
+	h, path, router := newIssue6631Handler(t, "request-retry: 3\nmax-retry-interval: 0\n")
+	staleReload, errLoad := config.LoadConfig(path)
+	if errLoad != nil {
+		t.Fatal(errLoad)
+	}
+
+	putIssue6631Value(t, router, "/v0/management/request-retry", `{"value":5}`)
+	h.SetConfig(staleReload)
+	putIssue6631Value(t, router, "/v0/management/max-retry-interval", `{"value":7}`)
+
+	h.mu.Lock()
+	memoryRetry, memoryCredentials := h.cfg.RequestRetry, h.cfg.MaxRetryInterval
+	h.mu.Unlock()
+	if memoryRetry != 5 || memoryCredentials != 7 {
+		t.Fatalf("in-memory config = request-retry %d, max-retry-interval %d; want 5, 7", memoryRetry, memoryCredentials)
+	}
+	disk := readIssue6631Disk(t, path)
+	if disk.RequestRetry != 5 || disk.MaxRetryInterval != 7 {
+		t.Fatalf("config.yaml = request-retry %d, max-retry-interval %d; want 5, 7", disk.RequestRetry, disk.MaxRetryInterval)
+	}
+}
+
+func TestSetConfigAppliesCurrentFileAndNonFileConfigs_Issue6631(t *testing.T) {
+	h, path, _ := newIssue6631Handler(t, "request-retry: 3\n")
+
+	if errWrite := os.WriteFile(path, []byte("request-retry: 9\n"), 0o600); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+	external, errLoad := config.LoadConfig(path)
+	if errLoad != nil {
+		t.Fatal(errLoad)
+	}
+	h.SetConfig(external)
+	h.mu.Lock()
+	gotExternal := h.cfg.RequestRetry
+	h.mu.Unlock()
+	if gotExternal != 9 {
+		t.Fatalf("request-retry after external edit = %d, want 9", gotExternal)
+	}
+
+	h.SetConfig(&config.Config{RequestRetry: 11})
+	h.mu.Lock()
+	gotNonFile := h.cfg.RequestRetry
+	h.mu.Unlock()
+	if gotNonFile != 11 {
+		t.Fatalf("request-retry after non-file config = %d, want 11", gotNonFile)
+	}
+}
+
+func TestManagementWritesSurviveConcurrentReloadPublications_Issue6631(t *testing.T) {
+	h, path, router := newIssue6631Handler(t, "request-retry: 0\nmax-retry-interval: 0\n")
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if reloaded, errLoad := config.LoadConfig(path); errLoad == nil {
+				h.SetConfig(reloaded)
+			}
+		}
+	}()
+	stopPublisher := sync.OnceFunc(func() {
+		close(stop)
+		wg.Wait()
+	})
+	t.Cleanup(stopPublisher)
+
+	const writes = 40
+	for i := 1; i <= writes; i++ {
+		putIssue6631Value(t, router, "/v0/management/request-retry", fmt.Sprintf(`{"value":%d}`, i))
+		putIssue6631Value(t, router, "/v0/management/max-retry-interval", fmt.Sprintf(`{"value":%d}`, i))
+	}
+	stopPublisher()
+
+	disk := readIssue6631Disk(t, path)
+	if disk.RequestRetry != writes || disk.MaxRetryInterval != writes {
+		t.Fatalf("config.yaml = request-retry %d, max-retry-interval %d; want %d, %d", disk.RequestRetry, disk.MaxRetryInterval, writes, writes)
+	}
+}
+
+func TestManagementGettersDuringConcurrentSaveAndReload(t *testing.T) {
+	h, _, router := newIssue6631Handler(t, "request-retry: 1\n")
+	router.GET("/v0/management/request-retry", h.GetRequestRetry)
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v0/management/request-retry", nil))
+			if recorder.Code != http.StatusOK {
+				t.Errorf("getter status: %d", recorder.Code)
+				return
+			}
+		}
+	}()
+	for i := 0; i < 20; i++ {
+		h.SetConfig(&config.Config{RequestRetry: i})
+		putIssue6631Value(t, router, "/v0/management/request-retry", fmt.Sprintf(`{"value":%d}`, i+1))
+	}
+	close(done)
+	wg.Wait()
+}

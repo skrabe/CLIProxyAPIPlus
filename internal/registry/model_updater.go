@@ -34,8 +34,6 @@ type modelStore struct {
 
 var modelsCatalogStore = &modelStore{}
 
-var updaterOnce sync.Once
-
 // ModelRefreshCallback is invoked when startup or periodic model refresh detects changes.
 // changedProviders contains the provider names whose model definitions changed.
 type ModelRefreshCallback func(changedProviders []string)
@@ -75,9 +73,7 @@ func init() {
 // immediately on startup and then refreshes the model catalog every 3 hours.
 // Safe to call multiple times; only one updater will run.
 func StartModelsUpdater(ctx context.Context) {
-	updaterOnce.Do(func() {
-		go runModelsUpdater(ctx)
-	})
+	StartModelCatalogUpdaters(ctx, CatalogSources{}, false)
 }
 
 func runModelsUpdater(ctx context.Context) {
@@ -281,6 +277,8 @@ func mergeEmbeddedAdditions(remote *staticModelsJSON) *staticModelsJSON {
 	remote.CodexPro = merge(remote.CodexPro, embedded.CodexPro)
 	remote.Kimi = merge(remote.Kimi, embedded.Kimi)
 	remote.Antigravity = merge(remote.Antigravity, embedded.Antigravity)
+	remote.Kiro = merge(remote.Kiro, embedded.Kiro)
+	remote.XAI = merge(remote.XAI, embedded.XAI)
 	return remote
 }
 
@@ -349,6 +347,7 @@ func detectChangedProviders(oldData, newData *staticModelsJSON) []string {
 		{"kimi", oldData.Kimi, newData.Kimi},
 		{"antigravity", oldData.Antigravity, newData.Antigravity},
 		{"xai", oldData.XAI, newData.XAI},
+		{"kiro", oldData.Kiro, newData.Kiro},
 	}
 
 	seen := make(map[string]bool, len(sections))
@@ -470,12 +469,18 @@ func validateModelsCatalog(data *staticModelsJSON) error {
 		{name: "kimi", models: data.Kimi},
 		{name: "antigravity", models: data.Antigravity},
 		{name: "xai", models: data.XAI},
+		{name: "kiro", models: data.Kiro},
 	}
 
+	totalModels := 0
 	for _, section := range requiredSections {
+		totalModels += len(section.models)
 		if err := validateModelSection(section.name, section.models); err != nil {
 			return err
 		}
+	}
+	if totalModels == 0 {
+		return fmt.Errorf("catalog has no models")
 	}
 	return nil
 }

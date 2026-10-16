@@ -6,12 +6,16 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	log "github.com/sirupsen/logrus"
@@ -27,7 +31,10 @@ const (
 
 // Config represents the application's configuration, loaded from a YAML file.
 type Config struct {
-	SDKConfig `yaml:",inline"`
+	SDKConfig                  `yaml:",inline"`
+	SourceHash                 string                  `yaml:"-" json:"-"`
+	Models                     registry.CatalogSources `yaml:"models" json:"models"`
+	TLSHandshakeTimeoutSeconds int                     `yaml:"tls-handshake-timeout-seconds" json:"tls-handshake-timeout-seconds"`
 	// Host is the network host/interface on which the API server will bind.
 	// Default is empty ("") to bind all interfaces (IPv4 + IPv6). Use "127.0.0.1" or "localhost" for local-only access.
 	Host string `yaml:"host" json:"-"`
@@ -798,6 +805,14 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// 		fmt.Println("Legacy configuration normalized in memory; persistence skipped.")
 	// 	}
 	// }
+
+	if err := cfg.Models.Validate(); err != nil {
+		return nil, err
+	}
+	if cfg.TLSHandshakeTimeoutSeconds < 0 {
+		cfg.TLSHandshakeTimeoutSeconds = 0
+	}
+	cfg.SourceHash = ComputeSourceHash(data)
 
 	// Return the populated configuration struct.
 	return &cfg, nil
@@ -2006,4 +2021,19 @@ func removeLegacyAuthBlock(root *yaml.Node) {
 		return
 	}
 	removeMapKey(root, "auth")
+}
+
+func ComputeSourceHash(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func (cfg *Config) TLSHandshakeTimeout() time.Duration {
+	if cfg == nil || cfg.TLSHandshakeTimeoutSeconds <= 0 {
+		return 0
+	}
+	if uint64(cfg.TLSHandshakeTimeoutSeconds) > uint64(math.MaxInt64/int64(time.Second)) {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(cfg.TLSHandshakeTimeoutSeconds) * time.Second
 }

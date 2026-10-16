@@ -27,14 +27,16 @@ func (h *Handler) putStringList(c *gin.Context, set func([]string), after func()
 		}
 		arr = obj.Items
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	set(arr)
 	if after != nil {
 		after()
 	}
-	h.persist(c)
+	h.persistLocked(c)
 }
 
-func (h *Handler) patchStringList(c *gin.Context, target *[]string, after func()) {
+func (h *Handler) patchStringList(c *gin.Context, targetOf func() *[]string, after func()) {
 	var body struct {
 		Old   *string `json:"old"`
 		New   *string `json:"new"`
@@ -45,12 +47,15 @@ func (h *Handler) patchStringList(c *gin.Context, target *[]string, after func()
 		c.JSON(400, gin.H{"error": "invalid body"})
 		return
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	target := targetOf()
 	if body.Index != nil && body.Value != nil && *body.Index >= 0 && *body.Index < len(*target) {
 		(*target)[*body.Index] = *body.Value
 		if after != nil {
 			after()
 		}
-		h.persist(c)
+		h.persistLocked(c)
 		return
 	}
 	if body.Old != nil && body.New != nil {
@@ -60,7 +65,7 @@ func (h *Handler) patchStringList(c *gin.Context, target *[]string, after func()
 				if after != nil {
 					after()
 				}
-				h.persist(c)
+				h.persistLocked(c)
 				return
 			}
 		}
@@ -68,13 +73,16 @@ func (h *Handler) patchStringList(c *gin.Context, target *[]string, after func()
 		if after != nil {
 			after()
 		}
-		h.persist(c)
+		h.persistLocked(c)
 		return
 	}
 	c.JSON(400, gin.H{"error": "missing fields"})
 }
 
-func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string, after func()) {
+func (h *Handler) deleteFromStringList(c *gin.Context, targetOf func() *[]string, after func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	target := targetOf()
 	if idxStr := c.Query("index"); idxStr != "" {
 		var idx int
 		_, err := fmt.Sscanf(idxStr, "%d", &idx)
@@ -83,7 +91,7 @@ func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string, after f
 			if after != nil {
 				after()
 			}
-			h.persist(c)
+			h.persistLocked(c)
 			return
 		}
 	}
@@ -98,7 +106,7 @@ func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string, after f
 		if after != nil {
 			after()
 		}
-		h.persist(c)
+		h.persistLocked(c)
 		return
 	}
 	c.JSON(400, gin.H{"error": "missing index or value"})
@@ -112,10 +120,10 @@ func (h *Handler) PutAPIKeys(c *gin.Context) {
 	}, nil)
 }
 func (h *Handler) PatchAPIKeys(c *gin.Context) {
-	h.patchStringList(c, &h.cfg.APIKeys, func() {})
+	h.patchStringList(c, func() *[]string { return &h.cfg.APIKeys }, func() {})
 }
 func (h *Handler) DeleteAPIKeys(c *gin.Context) {
-	h.deleteFromStringList(c, &h.cfg.APIKeys, func() {})
+	h.deleteFromStringList(c, func() *[]string { return &h.cfg.APIKeys }, func() {})
 }
 
 // gemini-api-key: []GeminiKey
@@ -736,6 +744,10 @@ func (h *Handler) DeleteVertexCompatKey(c *gin.Context) {
 
 // oauth-excluded-models: map[string][]string
 func (h *Handler) GetOAuthExcludedModels(c *gin.Context) {
+	if h != nil {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+	}
 	c.JSON(200, gin.H{"oauth-excluded-models": config.NormalizeOAuthExcludedModels(h.cfg.OAuthExcludedModels)})
 }
 
@@ -756,8 +768,10 @@ func (h *Handler) PutOAuthExcludedModels(c *gin.Context) {
 		}
 		entries = wrapper.Items
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.cfg.OAuthExcludedModels = config.NormalizeOAuthExcludedModels(entries)
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 func (h *Handler) PatchOAuthExcludedModels(c *gin.Context) {
@@ -775,6 +789,8 @@ func (h *Handler) PatchOAuthExcludedModels(c *gin.Context) {
 		return
 	}
 	normalized := config.NormalizeExcludedModels(body.Models)
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if len(normalized) == 0 {
 		if h.cfg.OAuthExcludedModels == nil {
 			c.JSON(404, gin.H{"error": "provider not found"})
@@ -788,14 +804,14 @@ func (h *Handler) PatchOAuthExcludedModels(c *gin.Context) {
 		if len(h.cfg.OAuthExcludedModels) == 0 {
 			h.cfg.OAuthExcludedModels = nil
 		}
-		h.persist(c)
+		h.persistLocked(c)
 		return
 	}
 	if h.cfg.OAuthExcludedModels == nil {
 		h.cfg.OAuthExcludedModels = make(map[string][]string)
 	}
 	h.cfg.OAuthExcludedModels[provider] = normalized
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 func (h *Handler) DeleteOAuthExcludedModels(c *gin.Context) {
@@ -804,6 +820,8 @@ func (h *Handler) DeleteOAuthExcludedModels(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "missing provider"})
 		return
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if h.cfg.OAuthExcludedModels == nil {
 		c.JSON(404, gin.H{"error": "provider not found"})
 		return
@@ -816,11 +834,15 @@ func (h *Handler) DeleteOAuthExcludedModels(c *gin.Context) {
 	if len(h.cfg.OAuthExcludedModels) == 0 {
 		h.cfg.OAuthExcludedModels = nil
 	}
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 // oauth-model-alias: map[string][]OAuthModelAlias
 func (h *Handler) GetOAuthModelAlias(c *gin.Context) {
+	if h != nil {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+	}
 	c.JSON(200, gin.H{"oauth-model-alias": sanitizedOAuthModelAlias(h.cfg.OAuthModelAlias)})
 }
 
@@ -841,8 +863,10 @@ func (h *Handler) PutOAuthModelAlias(c *gin.Context) {
 		}
 		entries = wrapper.Items
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.cfg.OAuthModelAlias = sanitizedOAuthModelAlias(entries)
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 func (h *Handler) PatchOAuthModelAlias(c *gin.Context) {
@@ -869,6 +893,8 @@ func (h *Handler) PatchOAuthModelAlias(c *gin.Context) {
 
 	normalizedMap := sanitizedOAuthModelAlias(map[string][]config.OAuthModelAlias{channel: body.Aliases})
 	normalized := normalizedMap[channel]
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if len(normalized) == 0 {
 		if h.cfg.OAuthModelAlias == nil {
 			c.JSON(404, gin.H{"error": "channel not found"})
@@ -882,14 +908,14 @@ func (h *Handler) PatchOAuthModelAlias(c *gin.Context) {
 		if len(h.cfg.OAuthModelAlias) == 0 {
 			h.cfg.OAuthModelAlias = nil
 		}
-		h.persist(c)
+		h.persistLocked(c)
 		return
 	}
 	if h.cfg.OAuthModelAlias == nil {
 		h.cfg.OAuthModelAlias = make(map[string][]config.OAuthModelAlias)
 	}
 	h.cfg.OAuthModelAlias[channel] = normalized
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 func (h *Handler) DeleteOAuthModelAlias(c *gin.Context) {
@@ -901,6 +927,8 @@ func (h *Handler) DeleteOAuthModelAlias(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "missing channel"})
 		return
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if h.cfg.OAuthModelAlias == nil {
 		c.JSON(404, gin.H{"error": "channel not found"})
 		return
@@ -913,7 +941,7 @@ func (h *Handler) DeleteOAuthModelAlias(c *gin.Context) {
 	if len(h.cfg.OAuthModelAlias) == 0 {
 		h.cfg.OAuthModelAlias = nil
 	}
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 // codex-api-key: []CodexKey
@@ -1215,6 +1243,10 @@ func sanitizedOAuthModelAlias(entries map[string][]config.OAuthModelAlias) map[s
 
 // GetAmpCode returns the complete ampcode configuration.
 func (h *Handler) GetAmpCode(c *gin.Context) {
+	if h != nil {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+	}
 	if h == nil || h.cfg == nil {
 		c.JSON(200, gin.H{"ampcode": config.AmpCode{}})
 		return
@@ -1224,6 +1256,10 @@ func (h *Handler) GetAmpCode(c *gin.Context) {
 
 // GetAmpUpstreamURL returns the ampcode upstream URL.
 func (h *Handler) GetAmpUpstreamURL(c *gin.Context) {
+	if h != nil {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+	}
 	if h == nil || h.cfg == nil {
 		c.JSON(200, gin.H{"upstream-url": ""})
 		return
@@ -1238,12 +1274,18 @@ func (h *Handler) PutAmpUpstreamURL(c *gin.Context) {
 
 // DeleteAmpUpstreamURL clears the ampcode upstream URL.
 func (h *Handler) DeleteAmpUpstreamURL(c *gin.Context) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.cfg.AmpCode.UpstreamURL = ""
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 // GetAmpUpstreamAPIKey returns the ampcode upstream API key.
 func (h *Handler) GetAmpUpstreamAPIKey(c *gin.Context) {
+	if h != nil {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+	}
 	if h == nil || h.cfg == nil {
 		c.JSON(200, gin.H{"upstream-api-key": ""})
 		return
@@ -1258,12 +1300,18 @@ func (h *Handler) PutAmpUpstreamAPIKey(c *gin.Context) {
 
 // DeleteAmpUpstreamAPIKey clears the ampcode upstream API key.
 func (h *Handler) DeleteAmpUpstreamAPIKey(c *gin.Context) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.cfg.AmpCode.UpstreamAPIKey = ""
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 // GetAmpRestrictManagementToLocalhost returns the localhost restriction setting.
 func (h *Handler) GetAmpRestrictManagementToLocalhost(c *gin.Context) {
+	if h != nil {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+	}
 	if h == nil || h.cfg == nil {
 		c.JSON(200, gin.H{"restrict-management-to-localhost": true})
 		return
@@ -1278,6 +1326,10 @@ func (h *Handler) PutAmpRestrictManagementToLocalhost(c *gin.Context) {
 
 // GetAmpModelMappings returns the ampcode model mappings.
 func (h *Handler) GetAmpModelMappings(c *gin.Context) {
+	if h != nil {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+	}
 	if h == nil || h.cfg == nil {
 		c.JSON(200, gin.H{"model-mappings": []config.AmpModelMapping{}})
 		return
@@ -1287,6 +1339,8 @@ func (h *Handler) GetAmpModelMappings(c *gin.Context) {
 
 // PutAmpModelMappings replaces all ampcode model mappings.
 func (h *Handler) PutAmpModelMappings(c *gin.Context) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	var body struct {
 		Value []config.AmpModelMapping `json:"value"`
 	}
@@ -1295,11 +1349,13 @@ func (h *Handler) PutAmpModelMappings(c *gin.Context) {
 		return
 	}
 	h.cfg.AmpCode.ModelMappings = body.Value
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 // PatchAmpModelMappings adds or updates model mappings.
 func (h *Handler) PatchAmpModelMappings(c *gin.Context) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	var body struct {
 		Value []config.AmpModelMapping `json:"value"`
 	}
@@ -1322,17 +1378,19 @@ func (h *Handler) PatchAmpModelMappings(c *gin.Context) {
 			existing[from] = len(h.cfg.AmpCode.ModelMappings) - 1
 		}
 	}
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 // DeleteAmpModelMappings removes specified model mappings by "from" field.
 func (h *Handler) DeleteAmpModelMappings(c *gin.Context) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	var body struct {
 		Value []string `json:"value"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || len(body.Value) == 0 {
 		h.cfg.AmpCode.ModelMappings = nil
-		h.persist(c)
+		h.persistLocked(c)
 		return
 	}
 
@@ -1348,11 +1406,15 @@ func (h *Handler) DeleteAmpModelMappings(c *gin.Context) {
 		}
 	}
 	h.cfg.AmpCode.ModelMappings = newMappings
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 // GetAmpForceModelMappings returns whether model mappings are forced.
 func (h *Handler) GetAmpForceModelMappings(c *gin.Context) {
+	if h != nil {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+	}
 	if h == nil || h.cfg == nil {
 		c.JSON(200, gin.H{"force-model-mappings": false})
 		return
@@ -1367,6 +1429,10 @@ func (h *Handler) PutAmpForceModelMappings(c *gin.Context) {
 
 // GetAmpUpstreamAPIKeys returns the ampcode upstream API keys mapping.
 func (h *Handler) GetAmpUpstreamAPIKeys(c *gin.Context) {
+	if h != nil {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+	}
 	if h == nil || h.cfg == nil {
 		c.JSON(200, gin.H{"upstream-api-keys": []config.AmpUpstreamAPIKeyEntry{}})
 		return
@@ -1376,6 +1442,8 @@ func (h *Handler) GetAmpUpstreamAPIKeys(c *gin.Context) {
 
 // PutAmpUpstreamAPIKeys replaces all ampcode upstream API keys mappings.
 func (h *Handler) PutAmpUpstreamAPIKeys(c *gin.Context) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	var body struct {
 		Value []config.AmpUpstreamAPIKeyEntry `json:"value"`
 	}
@@ -1386,12 +1454,14 @@ func (h *Handler) PutAmpUpstreamAPIKeys(c *gin.Context) {
 	// Normalize entries: trim whitespace, filter empty
 	normalized := normalizeAmpUpstreamAPIKeyEntries(body.Value)
 	h.cfg.AmpCode.UpstreamAPIKeys = normalized
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 // PatchAmpUpstreamAPIKeys adds or updates upstream API keys entries.
 // Matching is done by upstream-api-key value.
 func (h *Handler) PatchAmpUpstreamAPIKeys(c *gin.Context) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	var body struct {
 		Value []config.AmpUpstreamAPIKeyEntry `json:"value"`
 	}
@@ -1421,7 +1491,7 @@ func (h *Handler) PatchAmpUpstreamAPIKeys(c *gin.Context) {
 			existing[upstreamKey] = len(h.cfg.AmpCode.UpstreamAPIKeys) - 1
 		}
 	}
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 // DeleteAmpUpstreamAPIKeys removes specified upstream API keys entries.
@@ -1429,6 +1499,8 @@ func (h *Handler) PatchAmpUpstreamAPIKeys(c *gin.Context) {
 // If "value" is an empty array, clears all entries.
 // If JSON is invalid or "value" is missing/null, returns 400 and does not persist any change.
 func (h *Handler) DeleteAmpUpstreamAPIKeys(c *gin.Context) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	var body struct {
 		Value []string `json:"value"`
 	}
@@ -1445,7 +1517,7 @@ func (h *Handler) DeleteAmpUpstreamAPIKeys(c *gin.Context) {
 	// Empty array means clear all
 	if len(body.Value) == 0 {
 		h.cfg.AmpCode.UpstreamAPIKeys = nil
-		h.persist(c)
+		h.persistLocked(c)
 		return
 	}
 
@@ -1469,7 +1541,7 @@ func (h *Handler) DeleteAmpUpstreamAPIKeys(c *gin.Context) {
 		}
 	}
 	h.cfg.AmpCode.UpstreamAPIKeys = newEntries
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 // normalizeAmpUpstreamAPIKeyEntries normalizes a list of upstream API key entries.

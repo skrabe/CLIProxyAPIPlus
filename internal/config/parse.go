@@ -85,5 +85,11 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 	cfg.SanitizeOAuthModelAlias()
 	cfg.SanitizePayloadRules()
 
+	if err := cfg.Models.Validate(); err != nil {
+		return nil, err
+	}
+	if cfg.TLSHandshakeTimeoutSeconds < 0 {
+		cfg.TLSHandshakeTimeoutSeconds = 0
+	}
 	return &cfg, nil
 }

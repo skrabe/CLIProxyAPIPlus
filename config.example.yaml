@@ -5,6 +5,11 @@ host: ""
 # Server port
 port: 8317
 
+models:
+  catalog: ""
+
+tls-handshake-timeout-seconds: 0
+
 # TLS settings for HTTPS. When enabled, the server listens with the provided certificate and key.
 tls:
   enable: false

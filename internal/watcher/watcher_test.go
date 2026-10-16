@@ -1564,9 +1564,9 @@ func (s *stubStore) PersistConfig(context.Context) error {
 	return nil
 }
 func (s *stubStore) PersistAuthFiles(_ context.Context, message string, paths ...string) error {
-	atomic.AddInt32(&s.authPersisted, 1)
 	s.lastAuthMessage = message
 	s.lastAuthPaths = paths
+	atomic.AddInt32(&s.authPersisted, 1)
 	return nil
 }
 func (s *stubStore) AuthDir() string { return s.authDir }
@@ -1598,13 +1598,16 @@ func TestPersistConfigAndAuthAsyncInvokePersister(t *testing.T) {
 	w.persistConfigAsync()
 	w.persistAuthAsync("msg", " a ", "", "b ")
 
-	time.Sleep(30 * time.Millisecond)
 	store := w.storePersister.(*stubStore)
+	deadline := time.Now().Add(5 * time.Second)
+	for (atomic.LoadInt32(&store.cfgPersisted) != 1 || atomic.LoadInt32(&store.authPersisted) != 1) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
 	if atomic.LoadInt32(&store.cfgPersisted) != 1 {
-		t.Fatalf("expected PersistConfig to be called once, got %d", store.cfgPersisted)
+		t.Fatalf("expected PersistConfig to be called once, got %d", atomic.LoadInt32(&store.cfgPersisted))
 	}
 	if atomic.LoadInt32(&store.authPersisted) != 1 {
-		t.Fatalf("expected PersistAuthFiles to be called once, got %d", store.authPersisted)
+		t.Fatalf("expected PersistAuthFiles to be called once, got %d", atomic.LoadInt32(&store.authPersisted))
 	}
 	if store.lastAuthMessage != "msg" {
 		t.Fatalf("unexpected auth message: %s", store.lastAuthMessage)
@@ -1638,7 +1641,10 @@ func TestScheduleConfigReloadDebounces(t *testing.T) {
 	if atomic.LoadInt32(&reloads) != 1 {
 		t.Fatalf("expected single debounced reload, got %d", reloads)
 	}
-	if w.lastConfigHash == "" {
+	w.clientsMutex.RLock()
+	lastConfigHash := w.lastConfigHash
+	w.clientsMutex.RUnlock()
+	if lastConfigHash == "" {
 		t.Fatal("expected lastConfigHash to be set after reload")
 	}
 }

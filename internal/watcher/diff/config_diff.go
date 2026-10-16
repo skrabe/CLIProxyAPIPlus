@@ -17,6 +17,12 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 		return changes
 	}
 
+	if oldCfg.Models != newCfg.Models {
+		changes = append(changes, "models.catalog: source updated")
+	}
+	if oldCfg.TLSHandshakeTimeoutSeconds != newCfg.TLSHandshakeTimeoutSeconds {
+		changes = append(changes, fmt.Sprintf("tls-handshake-timeout-seconds: %d -> %d", oldCfg.TLSHandshakeTimeoutSeconds, newCfg.TLSHandshakeTimeoutSeconds))
+	}
 	// Simple scalars
 	if oldCfg.Port != newCfg.Port {
 		changes = append(changes, fmt.Sprintf("port: %d -> %d", oldCfg.Port, newCfg.Port))

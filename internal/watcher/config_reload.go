@@ -17,6 +17,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+var loadConfigFileFunc = config.LoadConfig
+
 func (w *Watcher) stopConfigReloadTimer() {
 	w.configReloadMu.Lock()
 	if w.configReloadTimer != nil {
@@ -41,6 +43,9 @@ func (w *Watcher) scheduleConfigReload() {
 }
 
 func (w *Watcher) reloadConfigIfChanged() {
+	w.configApplyMu.Lock()
+	defer w.configApplyMu.Unlock()
+
 	data, err := os.ReadFile(w.configPath)
 	if err != nil {
 		log.Errorf("failed to read config file for hash check: %v", err)
@@ -63,15 +68,12 @@ func (w *Watcher) reloadConfigIfChanged() {
 	}
 	log.Infof("config file changed, reloading: %s", w.configPath)
 	if w.reloadConfig() {
-		finalHash := newHash
-		if updatedData, errRead := os.ReadFile(w.configPath); errRead == nil && len(updatedData) > 0 {
-			sumUpdated := sha256.Sum256(updatedData)
-			finalHash = hex.EncodeToString(sumUpdated[:])
-		} else if errRead != nil {
-			log.WithError(errRead).Debug("failed to compute updated config hash after reload")
-		}
 		w.clientsMutex.Lock()
-		w.lastConfigHash = finalHash
+		appliedHash := newHash
+		if w.config != nil && w.config.SourceHash != "" {
+			appliedHash = w.config.SourceHash
+		}
+		w.lastConfigHash = appliedHash
 		w.clientsMutex.Unlock()
 		w.persistConfigAsync()
 	}
@@ -81,7 +83,7 @@ func (w *Watcher) reloadConfig() bool {
 	log.Debug("=========================== CONFIG RELOAD ============================")
 	log.Debugf("starting config reload from: %s", w.configPath)
 
-	newConfig, errLoadConfig := config.LoadConfig(w.configPath)
+	newConfig, errLoadConfig := loadConfigFileFunc(w.configPath)
 	if errLoadConfig != nil {
 		log.Errorf("failed to reload config: %v", errLoadConfig)
 		return false
