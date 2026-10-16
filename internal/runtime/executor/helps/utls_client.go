@@ -2,6 +2,10 @@ package helps
 
 import (
 	"context"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -20,10 +24,23 @@ import (
 // utlsRoundTripper implements http.RoundTripper using utls with Chrome fingerprint
 // to bypass Cloudflare's TLS fingerprinting on Anthropic domains.
 type utlsRoundTripper struct {
-	mu          sync.Mutex
-	connections map[string]*http2.ClientConn
-	pending     map[string]*sync.Cond
-	dialer      proxy.Dialer
+	dialer           proxy.Dialer
+	handshakeTimeout time.Duration
+	rootCAs          *x509.CertPool
+}
+
+type closeConnectionBody struct {
+	io.ReadCloser
+	closeConnection func() error
+	once            sync.Once
+	err             error
+}
+
+func (b *closeConnectionBody) Close() error {
+	b.once.Do(func() {
+		b.err = errors.Join(b.closeConnection(), b.ReadCloser.Close())
+	})
+	return b.err
 }
 
 func newUtlsRoundTripper(proxyURL string) *utlsRoundTripper {
@@ -36,70 +53,36 @@ func newUtlsRoundTripper(proxyURL string) *utlsRoundTripper {
 			dialer = proxyDialer
 		}
 	}
-	return &utlsRoundTripper{
-		connections: make(map[string]*http2.ClientConn),
-		pending:     make(map[string]*sync.Cond),
-		dialer:      dialer,
-	}
+	return &utlsRoundTripper{dialer: dialer}
 }
 
-func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (*http2.ClientConn, error) {
-	t.mu.Lock()
-
-	if h2Conn, ok := t.connections[host]; ok && h2Conn.CanTakeNewRequest() {
-		t.mu.Unlock()
-		return h2Conn, nil
+func (t *utlsRoundTripper) createConnection(ctx context.Context, host, addr string) (*http2.ClientConn, error) {
+	contextDialer, ok := t.dialer.(proxy.ContextDialer)
+	if !ok {
+		return nil, fmt.Errorf("utls: dialer does not support context cancellation")
 	}
-
-	if cond, ok := t.pending[host]; ok {
-		cond.Wait()
-		if h2Conn, ok := t.connections[host]; ok && h2Conn.CanTakeNewRequest() {
-			t.mu.Unlock()
-			return h2Conn, nil
-		}
-	}
-
-	cond := sync.NewCond(&t.mu)
-	t.pending[host] = cond
-	t.mu.Unlock()
-
-	h2Conn, err := t.createConnection(host, addr)
-
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	delete(t.pending, host)
-	cond.Broadcast()
-
+	conn, err := contextDialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("utls: dial upstream: %w", err)
 	}
-
-	t.connections[host] = h2Conn
-	return h2Conn, nil
-}
-
-func (t *utlsRoundTripper) createConnection(host, addr string) (*http2.ClientConn, error) {
-	conn, err := t.dialer.Dial("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-
-	tlsConfig := &tls.Config{ServerName: host}
+	tlsConfig := &tls.Config{ServerName: host, RootCAs: t.rootCAs}
 	tlsConn := tls.UClient(conn, tlsConfig, tls.HelloChrome_Auto)
-
-	if err := tlsConn.Handshake(); err != nil {
-		conn.Close()
-		return nil, err
+	handshakeCtx := ctx
+	if t.handshakeTimeout > 0 {
+		var cancel context.CancelFunc
+		handshakeCtx, cancel = context.WithTimeout(ctx, t.handshakeTimeout)
+		defer cancel()
 	}
-
+	if errHandshake := tlsConn.HandshakeContext(handshakeCtx); errHandshake != nil {
+		errClose := conn.Close()
+		return nil, fmt.Errorf("utls: TLS handshake: %w", errors.Join(errHandshake, errClose))
+	}
 	tr := &http2.Transport{}
 	h2Conn, err := tr.NewClientConn(tlsConn)
 	if err != nil {
-		tlsConn.Close()
-		return nil, err
+		errClose := tlsConn.Close()
+		return nil, fmt.Errorf("utls: initialize HTTP/2 connection: %w", errors.Join(err, errClose))
 	}
-
 	return h2Conn, nil
 }
 
@@ -110,22 +93,19 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 		port = "443"
 	}
 	addr := net.JoinHostPort(hostname, port)
-
-	h2Conn, err := t.getOrCreateConnection(hostname, addr)
+	h2Conn, err := t.createConnection(req.Context(), hostname, addr)
 	if err != nil {
 		return nil, err
 	}
-
 	resp, err := h2Conn.RoundTrip(req)
 	if err != nil {
-		t.mu.Lock()
-		if cached, ok := t.connections[hostname]; ok && cached == h2Conn {
-			delete(t.connections, hostname)
-		}
-		t.mu.Unlock()
-		return nil, err
+		errClose := h2Conn.Close()
+		return nil, errors.Join(err, errClose)
 	}
-
+	if resp.Body == nil {
+		resp.Body = http.NoBody
+	}
+	resp.Body = &closeConnectionBody{ReadCloser: resp.Body, closeConnection: h2Conn.Close}
 	return resp, nil
 }
 
@@ -169,7 +149,11 @@ func NewUtlsHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyau
 		ctxRoundTripper, _ = ctx.Value("cliproxy.roundtripper").(http.RoundTripper)
 	}
 
-	var utlsRT http.RoundTripper = newUtlsRoundTripper(proxyURL)
+	utlsTransport := newUtlsRoundTripper(proxyURL)
+	if cfg != nil {
+		utlsTransport.handshakeTimeout = cfg.TLSHandshakeTimeout()
+	}
+	var utlsRT http.RoundTripper = utlsTransport
 	var standardTransport http.RoundTripper = http.DefaultTransport
 	if proxyURL != "" {
 		if transport := buildProxyTransport(proxyURL); transport != nil {
