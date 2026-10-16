@@ -9,6 +9,7 @@ import internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 type SDKConfig = internalconfig.SDKConfig
 
 type Config = internalconfig.Config
+type ModelCatalogs = internalconfig.ModelCatalogs
 
 type StreamingConfig = internalconfig.StreamingConfig
 type TLSConfig = internalconfig.TLSConfig

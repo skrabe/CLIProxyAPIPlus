@@ -32,9 +32,9 @@ const (
 // Config represents the application's configuration, loaded from a YAML file.
 type Config struct {
 	SDKConfig                  `yaml:",inline"`
-	SourceHash                 string                  `yaml:"-" json:"-"`
-	Models                     registry.CatalogSources `yaml:"models" json:"models"`
-	TLSHandshakeTimeoutSeconds int                     `yaml:"tls-handshake-timeout-seconds" json:"tls-handshake-timeout-seconds"`
+	SourceHash                 string        `yaml:"-" json:"-"`
+	Models                     ModelCatalogs `yaml:"models" json:"models"`
+	TLSHandshakeTimeoutSeconds int           `yaml:"tls-handshake-timeout-seconds" json:"tls-handshake-timeout-seconds"`
 	// Host is the network host/interface on which the API server will bind.
 	// Default is empty ("") to bind all interfaces (IPv4 + IPv6). Use "127.0.0.1" or "localhost" for local-only access.
 	Host string `yaml:"host" json:"-"`
