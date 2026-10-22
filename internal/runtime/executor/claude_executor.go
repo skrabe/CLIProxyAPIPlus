@@ -2703,39 +2703,33 @@ func applyClaudeCodeCachePattern(body []byte) []byte {
 // stripAllCacheControl removes every cache_control marker from tools, system,
 // and messages content blocks. Used before applyClaudeCodeCachePattern so the
 // client's (possibly wasteful) layout does not leak into the final request.
+// Only blocks that carry a marker are rewritten: each sjson delete rescans the
+// whole body, so touching every block is quadratic on long conversations.
 func stripAllCacheControl(body []byte) []byte {
-	if tools := gjson.GetBytes(body, "tools"); tools.IsArray() {
-		tools.ForEach(func(idx, _ gjson.Result) bool {
-			path := fmt.Sprintf("tools.%d.cache_control", int(idx.Int()))
-			if updated, err := sjson.DeleteBytes(body, path); err == nil {
-				body = updated
+	var paths []string
+	collect := func(prefix string, arr gjson.Result) {
+		if !arr.IsArray() {
+			return
+		}
+		arr.ForEach(func(idx, block gjson.Result) bool {
+			if block.Get("cache_control").Exists() {
+				paths = append(paths, fmt.Sprintf("%s.%d.cache_control", prefix, int(idx.Int())))
 			}
 			return true
 		})
 	}
-	if system := gjson.GetBytes(body, "system"); system.IsArray() {
-		system.ForEach(func(idx, _ gjson.Result) bool {
-			path := fmt.Sprintf("system.%d.cache_control", int(idx.Int()))
-			if updated, err := sjson.DeleteBytes(body, path); err == nil {
-				body = updated
-			}
-			return true
-		})
-	}
+	collect("tools", gjson.GetBytes(body, "tools"))
+	collect("system", gjson.GetBytes(body, "system"))
 	if messages := gjson.GetBytes(body, "messages"); messages.IsArray() {
 		messages.ForEach(func(midx, msg gjson.Result) bool {
-			content := msg.Get("content")
-			if content.IsArray() {
-				content.ForEach(func(cidx, _ gjson.Result) bool {
-					path := fmt.Sprintf("messages.%d.content.%d.cache_control", int(midx.Int()), int(cidx.Int()))
-					if updated, err := sjson.DeleteBytes(body, path); err == nil {
-						body = updated
-					}
-					return true
-				})
-			}
+			collect(fmt.Sprintf("messages.%d.content", int(midx.Int())), msg.Get("content"))
 			return true
 		})
+	}
+	for _, path := range paths {
+		if updated, err := sjson.DeleteBytes(body, path); err == nil {
+			body = updated
+		}
 	}
 	return body
 }
