@@ -73,6 +73,3 @@ docker-compose.override.yml
 # Local LLM Wiki vault
 .llm-wiki
 
-# local build outputs
-/cli-proxy-api-plus
-/cli-proxy-api-plus-linux-amd64
