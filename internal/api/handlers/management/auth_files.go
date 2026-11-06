@@ -751,6 +751,8 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quota authFileQu
 	}
 	if claims := extractCodexIDTokenClaims(auth); claims != nil {
 		entry["id_token"] = claims
+	} else if claims := claudeWorkspaceClaims(auth); claims != nil {
+		entry["id_token"] = claims
 	}
 	// Expose priority from Attributes (set by synthesizer from JSON "priority" field).
 	// Fall back to Metadata for auths registered via UploadAuthFile (no synthesizer).
@@ -1040,6 +1042,22 @@ func extractCodexIDTokenClaims(auth *coreauth.Auth) gin.H {
 		return nil
 	}
 	return result
+}
+
+// claudeWorkspaceClaims exposes a Claude credential's organization as a workspace
+// identity for usage dashboards. Management clients key accounts by email plus
+// id_token.chatgpt_account_id, so without it two seats sharing one email (for
+// example a personal subscription and a team seat) collapse into one account.
+// Only the derived identity is emitted; the stored credential is never changed.
+func claudeWorkspaceClaims(auth *coreauth.Auth) gin.H {
+	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "claude") {
+		return nil
+	}
+	organizationID := authIdentityOrganizationID(auth)
+	if organizationID == "" {
+		return nil
+	}
+	return gin.H{"chatgpt_account_id": organizationID}
 }
 
 func authEmail(auth *coreauth.Auth) string {
