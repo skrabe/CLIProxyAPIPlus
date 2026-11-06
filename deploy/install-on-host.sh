@@ -26,13 +26,26 @@ restart_profile() {
     fi
 }
 
-profile_running() {
-    local p="$1"
+service_state() {
     if [[ "$(uname -s)" == "Darwin" ]]; then
-        launchctl print "gui/$(id -u)/com.cliproxyapiplus.$p" 2>/dev/null | grep -q "state = running"
+        local out
+        out="$(launchctl print "gui/$(id -u)/com.cliproxyapiplus.$1" 2>&1 || true)"
+        sed -n 's/^[[:space:]]*state = //p' <<<"$out" | head -n1
     else
-        systemctl --user is-active -q "cliproxy-$p.service"
+        systemctl --user is-active "cliproxy-$1.service" 2>/dev/null || true
     fi
+}
+
+# Waits up to 20s for the service to be up (launchd/systemd may still be spawning).
+profile_running() {
+    local p="$1" state=""
+    for _ in $(seq 1 20); do
+        state="$(service_state "$p")"
+        [[ "$state" == "running" || "$state" == "active" ]] && return 0
+        sleep 1
+    done
+    say "$p: service state '$state'"
+    return 1
 }
 
 # Linux only: make sure the profile comes back after a reboot.
