@@ -64,19 +64,40 @@ build() {
     CGO_ENABLED=0 GOOS="$1" GOARCH="$2" go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/$1-$2" ./cmd/server
 }
 
+# Prints "<goos> <goarch>" for a remote host, so each host gets a binary for its
+# own CPU (hermes is arm64, omarchy is amd64).
+host_platform() {
+    local os arch
+    read -r os arch < <(ssh "$1" 'uname -s; uname -m' | paste -sd' ' -) || return 1
+    case "$os" in Linux) os=linux ;; Darwin) os=darwin ;; *) echo "unsupported OS '$os'" >&2; return 1 ;; esac
+    case "$arch" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) echo "unsupported arch '$arch'" >&2; return 1 ;; esac
+    echo "$os $arch"
+}
+
 build "$(go env GOOS)" "$(go env GOARCH)"
-[[ $local_only -eq 0 && -n "$HOSTS" ]] && build linux amd64
+
+# "host os arch" lines (no associative arrays: macOS ships bash 3.2).
+host_targets=""
+if [[ $local_only -eq 0 ]]; then
+    for host in $HOSTS; do
+        target="$(host_platform "$host")" || { echo "ERROR: cannot detect the platform of $host." >&2; exit 1; }
+        host_targets+="$host $target"$'\n'
+        read -r os arch <<<"$target"
+        [[ -f "$OUT/$os-$arch" ]] || build "$os" "$arch"
+    done
+fi
 
 echo "==> Deploying locally..."
 install -m 0755 "$OUT/$(go env GOOS)-$(go env GOARCH)" "$HOME/.local/bin/$BINARY_NAME.new"
 bash deploy/install-on-host.sh
 
 if [[ $local_only -eq 0 ]]; then
-    for host in $HOSTS; do
-        echo "==> Deploying to $host..."
-        scp -q "$OUT/linux-amd64" "$host:.local/bin/$BINARY_NAME.new"
+    while read -r host os arch; do
+        [[ -n "$host" ]] || continue
+        echo "==> Deploying $os/$arch to $host..."
+        scp -q "$OUT/$os-$arch" "$host:.local/bin/$BINARY_NAME.new"
         ssh "$host" 'bash -s' < deploy/install-on-host.sh
-    done
+    done <<<"$host_targets"
 fi
 
 if [[ $push -eq 1 ]]; then
