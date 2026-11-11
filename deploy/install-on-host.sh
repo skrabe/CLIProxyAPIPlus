@@ -85,20 +85,26 @@ for env in "$PROFILES_DIR"/*/client.env; do
 done
 [[ ${#profiles[@]} -gt 0 ]] || { say "no profiles under $PROFILES_DIR"; exit 1; }
 
+binary_version() {
+    local help
+    help="$("$1" --help 2>&1)" || true
+    grep -m1 -oE 'Version: [^,]+' <<<"$help"
+}
+
 chmod 0755 "$BIN.new"
 # Refuse a binary that cannot run here (e.g. built for the wrong CPU); without
 # this, systemd restart-loops on "Exec format error" once the old process dies.
-if ! "$BIN.new" --help 2>&1 | grep -q 'Version: '; then
+if ! binary_version "$BIN.new" >/dev/null; then
     say "refusing $BIN.new: it does not run on $(uname -s)/$(uname -m) ($(file -b "$BIN.new" 2>/dev/null | cut -d, -f1-2))"
     rm -f "$BIN.new"
     exit 1
 fi
 # Only keep a backup that actually runs, so a rollback never restores a broken binary.
-if [[ -f "$BIN" ]] && "$BIN" --help 2>&1 | grep -q 'Version: '; then
+if [[ -f "$BIN" ]] && binary_version "$BIN" >/dev/null; then
     cp -p "$BIN" "$BIN.bak"
 fi
 mv "$BIN.new" "$BIN"
-say "installed $("$BIN" --help 2>&1 | grep -m1 -oE 'Version: [^,]+')"
+say "installed $(binary_version "$BIN")"
 
 for p in "${profiles[@]}"; do
     restart_profile "$p"
