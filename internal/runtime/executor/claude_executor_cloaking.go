@@ -719,20 +719,12 @@ func checkSystemInstructionsWithSigningModeDoc(doc *ojson.Doc, strictMode bool, 
 	return checkSystemInstructionsWithSigningModeAtDoc(doc, strictMode, cchSigning, version, entrypoint, workload, claudeCodeLocalDate(time.Now()), false, "", "", keepAtTopLevel, "")
 }
 
-// isClaudeFable51Model reports whether the model is specifically Fable 5.1 / Mythos 5.1,
+// isClaudeFable51OrLaterModel reports Fable 5.1 / Mythos 5.1 and Fable 5.2,
 // matching native Claude Code 2.1.258 family/major/minor checks (AFo = {major:5, minor:1}).
-func isClaudeFable51Model(model string) bool {
-	m := strings.ToLower(strings.TrimSpace(model))
-	for _, target := range []string{"fable-5-1", "fable-5.1", "mythos-5-1", "mythos-5.1"} {
-		idx := strings.Index(m, target)
-		if idx != -1 {
-			nextIdx := idx + len(target)
-			if nextIdx >= len(m) || m[nextIdx] < '0' || m[nextIdx] > '9' {
-				return true
-			}
-		}
-	}
-	return false
+// Claude Code 2.1.322 sends Fable 5.2 with the same request shape and betas as
+// Fable 5.1, and resolves the same refusal-fallback target for both.
+func isClaudeFable51OrLaterModel(model string) bool {
+	return claudeModelHasVersion(model, "fable-5-1", "fable-5.1", "fable-5-2", "fable-5.2", "mythos-5-1", "mythos-5.1")
 }
 
 type forwardedClaudeSystemPromptBlock struct {
@@ -841,7 +833,7 @@ func checkSystemInstructionsWithSigningModeAtDoc(
 
 	systemBlocks := []string{billingBlock, agentBlock}
 	model := strings.ToLower(strings.TrimSpace(doc.Get("model").String()))
-	if isClaudeFable51Model(model) && !isClaudeProbeOrHelperRequestDoc(doc) {
+	if isClaudeFable51OrLaterModel(model) && !isClaudeProbeOrHelperRequestDoc(doc) {
 		systemBlocks = append(systemBlocks, buildTextBlock(claudeCodeFableReportingOutcomes, nil))
 	}
 	_ = doc.SetRawBytes("system", []byte("["+strings.Join(systemBlocks, ",")+"]"))
@@ -1688,7 +1680,7 @@ func captureClaudeCodeFableState(before, after []byte, cloaked bool) claudeCodeF
 
 // reconcileClaudeCodeFableModelAfterPayload reconciles model-specific additions
 // (Opus fallback, thinking.display=updates, and # Reporting outcomes system block)
-// if payload rules rewrite the request model between Fable 5.1 and non-Fable models.
+// if payload rules rewrite the request model between Fable 5.1+ and non-Fable models.
 func reconcileClaudeCodeFableModelAfterPayload(
 	body []byte,
 	fableState claudeCodeFableState,
@@ -1762,7 +1754,7 @@ func reconcileClaudeCodeFableModelAfterPayloadDoc(
 	if fableState.injectedFallbacks && !payloadTouchedFallbacks {
 		wantFallback := ""
 		switch {
-		case isClaudeFable51Model(currentModel):
+		case isClaudeFable51OrLaterModel(currentModel):
 			wantFallback = "claude-opus-5"
 		case isClaudeOpus55Model(currentModel):
 			wantFallback = "claude-opus-4-8"
@@ -1774,8 +1766,8 @@ func reconcileClaudeCodeFableModelAfterPayloadDoc(
 		}
 	}
 
-	if isClaudeFable51Model(currentModel) {
-		// Non-Fable rewritten to Fable 5.1 (or original Fable 5.1): attach Fable additions
+	if isClaudeFable51OrLaterModel(currentModel) {
+		// Non-Fable rewritten to Fable 5.1+ (or original Fable 5.1+): attach Fable additions
 		// unless matching payload rules explicitly configured or filtered them.
 		if !doc.Get("fallbacks").Exists() && !payloadTouchedFallbacks {
 			_ = doc.SetRawBytes("fallbacks", []byte(`[{"model":"claude-opus-5"}]`))
@@ -2638,13 +2630,14 @@ func applyCloakingInternalDoc(
 		turnOriginArgs...,
 	)
 
-	// In native Claude Code 2.1.258, claude-fable-5-1 requests carry:
-	// "fallbacks": [{"model": "claude-opus-5"}]
+	// In native Claude Code 2.1.258, claude-fable-5-1 requests carry
+	// "fallbacks": [{"model": "claude-opus-5"}]; 2.1.322 resolves the same
+	// target for claude-fable-5-2.
 	model := strings.ToLower(strings.TrimSpace(doc.Get("model").String()))
 	if isClaudeOpus55Model(model) && !isProbeOrHelper && !doc.Get("fallbacks").Exists() {
 		_ = doc.SetRawBytes("fallbacks", []byte(`[{"model":"claude-opus-4-8"}]`))
 	}
-	if isClaudeFable51Model(model) && !isProbeOrHelper {
+	if isClaudeFable51OrLaterModel(model) && !isProbeOrHelper {
 		if !doc.Get("fallbacks").Exists() {
 			_ = doc.SetRawBytes("fallbacks", []byte(`[{"model":"claude-opus-5"}]`))
 		}

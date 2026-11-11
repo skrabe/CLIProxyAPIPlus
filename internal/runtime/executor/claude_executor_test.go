@@ -11,8 +11,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -10223,32 +10223,70 @@ func TestClaudeExecutor_PreservesNativeAgentAndEnvironmentHeaders(t *testing.T) 
 	}
 }
 
-func TestIsClaudeFable51Model_DigitBoundary(t *testing.T) {
+func TestIsClaudeFable51OrLaterModel_DigitBoundary(t *testing.T) {
 	valid := []string{
 		"claude-fable-5-1",
 		"claude-fable-5.1",
 		"claude-fable-5-1-20260901",
+		"claude-fable-5-2",
+		"claude-fable-5.2",
+		"claude-fable-5-2[1m]",
 		"claude-mythos-5-1",
 		"claude-mythos-5.1",
 		"claude-mythos-5-1-preview",
 	}
 	for _, m := range valid {
-		if !isClaudeFable51Model(m) {
-			t.Errorf("expected %q to be recognized as Fable 5.1", m)
+		if !isClaudeFable51OrLaterModel(m) {
+			t.Errorf("expected %q to be recognized as Fable 5.1 or later", m)
 		}
 	}
 
 	invalid := []string{
+		"claude-fable-5",
 		"claude-fable-5-10",
 		"claude-fable-5.10",
+		"claude-fable-5-20",
 		"claude-mythos-5-10",
+		"claude-mythos-5-2",
 		"claude-sonnet-5",
 		"claude-opus-5",
 		"claude-haiku-4-5",
 	}
 	for _, m := range invalid {
-		if isClaudeFable51Model(m) {
-			t.Errorf("expected %q NOT to be recognized as Fable 5.1", m)
+		if isClaudeFable51OrLaterModel(m) {
+			t.Errorf("expected %q NOT to be recognized as Fable 5.1 or later", m)
+		}
+	}
+}
+
+func TestClaudeFable52ModelCapabilities(t *testing.T) {
+	cases := []struct {
+		model           string
+		perTurnEffort   bool
+		perTurnTiming   bool
+		boundThinking   bool
+		progressDisplay bool
+	}{
+		{model: "claude-fable-5-1", perTurnEffort: true, perTurnTiming: true, boundThinking: true, progressDisplay: true},
+		{model: "claude-fable-5-2", perTurnEffort: true, perTurnTiming: true, boundThinking: true, progressDisplay: true},
+		{model: "claude-fable-5-2[1m]", perTurnEffort: true, perTurnTiming: true, boundThinking: true, progressDisplay: true},
+		{model: "claude-mythos-5-1", perTurnTiming: true, progressDisplay: true},
+		{model: "claude-mythos-5-2", perTurnEffort: true, perTurnTiming: true, boundThinking: true},
+		{model: "claude-fable-5"},
+		{model: "claude-fable-5-20"},
+	}
+	for _, tc := range cases {
+		if got := claudeModelHasPerTurnEffort(tc.model); got != tc.perTurnEffort {
+			t.Errorf("claudeModelHasPerTurnEffort(%q) = %v, want %v", tc.model, got, tc.perTurnEffort)
+		}
+		if got := claudeModelHasPerTurnTiming(tc.model); got != tc.perTurnTiming {
+			t.Errorf("claudeModelHasPerTurnTiming(%q) = %v, want %v", tc.model, got, tc.perTurnTiming)
+		}
+		if got := isClaudePreservedThinkingModel(tc.model); got != tc.boundThinking {
+			t.Errorf("isClaudePreservedThinkingModel(%q) = %v, want %v", tc.model, got, tc.boundThinking)
+		}
+		if got := claudeModelUsesProgressDisplay(tc.model); got != tc.progressDisplay {
+			t.Errorf("claudeModelUsesProgressDisplay(%q) = %v, want %v", tc.model, got, tc.progressDisplay)
 		}
 	}
 }

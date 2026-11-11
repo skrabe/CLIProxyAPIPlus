@@ -147,7 +147,7 @@ func isManagedClaudeBeta(beta string) bool {
 //	 7 context-management-2025-06-27
 //	 8 prompt-caching-scope-2026-01-05
 //	 9 mid-conversation-system-2026-04-07  models accepting a role=system turn
-//	10 per-turn-control-2026-07-01        opus-5-5 and fable-5-1, or requested
+//	10 per-turn-control-2026-07-01        opus-5-5, fable-5-1/5-2, mythos-5-2, or requested
 //	11 timing-2026-09-09                  per-turn timing body, or requested
 //	12 mid-conversation-tool-changes-2026-07-01  same models as mid-conversation-system
 //	13 inline-tools-2026-09-15            inline tool_addition blocks, or requested
@@ -314,12 +314,12 @@ func isClaudeHaiku55Model(model string) bool {
 	return model == "claude-haiku-5-5" || strings.HasPrefix(model, "claude-haiku-5-5-") || strings.HasPrefix(model, "claude-haiku-5-5[") || model == "claude-haiku-5.5" || strings.HasPrefix(model, "claude-haiku-5.5-") || strings.HasPrefix(model, "claude-haiku-5.5[")
 }
 
-// isClaudeFable51OnlyModel reports Fable 5.1 specifically, excluding Mythos
-// 5.1, which shares the fable family checks elsewhere but does not run the
-// preserved-thinking prefix check.
-func isClaudeFable51OnlyModel(model string) bool {
+// claudeModelHasVersion reports whether the canonical model contains one of
+// the family-version targets not followed by another digit, so "fable-5-1"
+// matches claude-fable-5-1 and claude-fable-5-1[1m] but not claude-fable-5-10.
+func claudeModelHasVersion(model string, targets ...string) bool {
 	m := claudeCanonicalModel(model)
-	for _, target := range []string{"fable-5-1", "fable-5.1"} {
+	for _, target := range targets {
 		idx := strings.Index(m, target)
 		if idx != -1 {
 			nextIdx := idx + len(target)
@@ -331,13 +331,20 @@ func isClaudeFable51OnlyModel(model string) bool {
 	return false
 }
 
+// isClaudeFableBoundThinkingModel reports the Fable and Mythos releases that
+// run the preserved-thinking prefix check: Fable 5.1, Fable 5.2, and Mythos
+// 5.2. Mythos 5.1 shares the fable family checks elsewhere but does not run it.
+func isClaudeFableBoundThinkingModel(model string) bool {
+	return claudeModelHasVersion(model, "fable-5-1", "fable-5.1", "fable-5-2", "fable-5.2", "mythos-5-2", "mythos-5.2")
+}
+
 // isClaudePreservedThinkingModel reports the models whose signed thinking
 // blocks Anthropic binds to the creation-time conversation prefix (system,
 // tools, and every earlier message). Replaying those blocks under a reshaped
 // prefix fails binding validation unless the request opts into dropping them.
 // See https://platform.claude.com/docs/en/build-with-claude/preserved-thinking
 func isClaudePreservedThinkingModel(model string) bool {
-	return isClaudeOpus55Model(model) || isClaudeSonnet55Model(model) || isClaudeHaiku55Model(model) || isClaudeFable51OnlyModel(model)
+	return isClaudeOpus55Model(model) || isClaudeSonnet55Model(model) || isClaudeHaiku55Model(model) || isClaudeFableBoundThinkingModel(model)
 }
 
 // claudeThinkingTypeAcceptsBlockBinding reports whether the body's thinking
@@ -435,7 +442,7 @@ func applyClaudePreservedThinkingBindingDoc(doc *ojson.Doc) bool {
 // claudeModelUsesProgressDisplay reports the 2.1.280 interactive CLI models that
 // send thinking.display=updates unless the caller already chose a display mode.
 func claudeModelUsesProgressDisplay(model string) bool {
-	return isClaudeOpus55Model(model) || isClaudeFable51Model(model) || isClaudeSonnet5Model(model) || isClaudeSonnet55Model(model)
+	return isClaudeOpus55Model(model) || isClaudeFable51OrLaterModel(model) || isClaudeSonnet5Model(model) || isClaudeSonnet55Model(model)
 }
 
 // applyClaudeCloakThinkingDisplay fills the latest CLI display only when the
@@ -468,15 +475,14 @@ func applyClaudeCloakThinkingDisplayDoc(doc *ojson.Doc, callerOwned bool) bool {
 }
 
 func claudeModelHasPerTurnEffort(model string) bool {
-	return isClaudeOpus55Model(model) || strings.HasPrefix(claudeCanonicalModel(model), "claude-fable-5-1")
+	return isClaudeOpus55Model(model) || claudeModelHasVersion(model, "claude-fable-5-1", "claude-fable-5-2", "claude-mythos-5-2")
 }
 
 // claudeModelHasPerTurnTiming reports models whose catalog lists per_turn_timing.
 // Claude Code still withholds timing-2026-09-09 unless CLAUDE_CODE_PER_TURN_TIMING
 // is set, so the beta follows the body or an explicit caller request.
 func claudeModelHasPerTurnTiming(model string) bool {
-	model = claudeCanonicalModel(model)
-	return claudeModelHasPerTurnEffort(model) || strings.HasPrefix(model, "claude-mythos-5-1")
+	return claudeModelHasPerTurnEffort(model) || claudeModelHasVersion(model, "claude-mythos-5-1")
 }
 
 func claudeIncludePerTurnControl(body []byte, requested map[string]bool) bool {
